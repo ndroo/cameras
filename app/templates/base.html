@@ -19,7 +19,7 @@
     {% if me %}
       <a href="/events" class="{% if request.url.path == '/events' %}on{% endif %}">Events</a>
       {% if me.is_admin %}<a href="/admin" class="{% if request.url.path.startswith('/admin') %}on{% endif %}">Admin</a>{% endif %}
-      <a href="/logout" title="Signed in as {{ me.name }}">Sign out</a>
+      <a href="/account" class="{% if request.url.path.startswith('/account') %}on{% endif %}" title="Signed in as {{ me.name }}">Account</a>
     {% endif %}
   </nav>
 </header>

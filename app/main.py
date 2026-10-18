@@ -110,54 +110,134 @@ async def _redirects(request, exc):
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
 
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str = "/", err: str = ""):
-    if current_person(request):
-        return RedirectResponse(next or "/")
-    return render(request, "login.html", next=next, err=err, phone="")
+def _find_person(ident):
+    """Look a person up by mobile number or email. Returns (person, channel, address)."""
+    ph = sms.normalize_phone(ident)
+    if ph:
+        p = db.one("SELECT * FROM people WHERE phone=?", ph)
+        admin_phone = sms.normalize_phone(os.environ.get("ADMIN_PHONE", ""))
+        if not p and admin_phone and ph == admin_phone:
+            db.run("INSERT INTO people(name,phone,is_admin,created) VALUES(?,?,1,?)",
+                   os.environ.get("ADMIN_NAME", "Admin"), ph, time.time())
+            p = db.one("SELECT * FROM people WHERE phone=?", ph)
+        return p, "sms", ph
+    em = sms.normalize_email(ident)
+    if em:
+        return db.one("SELECT * FROM people WHERE email=?", em), "email", em
+    return None, None, None
 
 
-@app.post("/login", response_class=HTMLResponse)
-def login_send(request: Request, phone: str = Form(...), next: str = Form("/")):
-    ph = sms.normalize_phone(phone)
-    if not ph:
-        return render(request, "login.html", next=next, err="That doesn't look like a phone number.", phone=phone)
-    person = db.one("SELECT * FROM people WHERE phone=?", ph)
-    admin_phone = sms.normalize_phone(os.environ.get("ADMIN_PHONE", ""))
-    if not person and admin_phone and ph == admin_phone:
-        db.run("INSERT INTO people(name,phone,is_admin,created) VALUES(?,?,1,?)",
-               os.environ.get("ADMIN_NAME", "Admin"), ph, time.time())
-        person = db.one("SELECT * FROM people WHERE phone=?", ph)
-    if not person:
-        return render(request, "login.html", next=next, phone=phone,
-                      err="That number isn't set up for camera access yet. Ask Andrew to add you.")
-    recent = db.one("SELECT COUNT(*) n FROM otps WHERE phone=? AND created>?", ph, time.time() - 600)["n"]
-    if recent >= 4:
-        return render(request, "login.html", next=next, phone=phone, err="Too many codes sent. Try again in 10 minutes.")
-    code = f"{random.SystemRandom().randrange(0, 1000000):06d}"
-    db.run("DELETE FROM otps WHERE phone=? OR expires<?", ph, time.time())
-    db.run("INSERT INTO otps(phone,code,expires,created) VALUES(?,?,?,?)", ph, code, time.time() + 600, time.time())
-    sms.send(ph, f"Your camera login code is {code}. It expires in 10 minutes.", kind="otp", person_id=person["id"])
-    return render(request, "code.html", next=next, phone=ph, err="")
+def _locked(ident):
+    r = db.one("SELECT * FROM login_fails WHERE ident=?", ident)
+    return bool(r and r["until"] and r["until"] > time.time())
 
 
-@app.post("/login/code", response_class=HTMLResponse)
-def login_code(request: Request, phone: str = Form(...), code: str = Form(...), next: str = Form("/")):
-    ph = sms.normalize_phone(phone)
-    row = db.one("SELECT rowid, * FROM otps WHERE phone=? ORDER BY created DESC LIMIT 1", ph)
-    code = "".join(ch for ch in code if ch.isdigit())
-    if not row or row["expires"] < time.time() or row["attempts"] >= 5 or row["code"] != code:
-        if row:
-            db.run("UPDATE otps SET attempts=attempts+1 WHERE rowid=?", row["rowid"])
-        return render(request, "code.html", next=next, phone=ph, err="Wrong or expired code.")
-    db.run("DELETE FROM otps WHERE phone=?", ph)
-    person = db.one("SELECT * FROM people WHERE phone=?", ph)
+def _fail(ident):
+    r = db.one("SELECT * FROM login_fails WHERE ident=?", ident)
+    n = (r["count"] if r else 0) + 1
+    until = time.time() + 900 if n >= 8 else None
+    db.run("INSERT INTO login_fails(ident,count,until) VALUES(?,?,?) ON CONFLICT(ident) DO UPDATE SET count=excluded.count, until=excluded.until", ident, 0 if until else n, until)
+
+
+def _start_session(request, person, next):
+    db.run("DELETE FROM login_fails WHERE ident IN (?,?)", person["phone"], person["email"] or "")
     tok = secrets.token_urlsafe(32)
     db.run("INSERT INTO sessions(token,person_id,created,last_seen,ua) VALUES(?,?,?,?,?)",
            tok, person["id"], time.time(), time.time(), request.headers.get("user-agent", "")[:200])
     resp = RedirectResponse(next if next.startswith("/") else "/", status_code=303)
     resp.set_cookie("s", tok, max_age=365 * 86400, httponly=True, secure=SECURE_COOKIE, samesite="lax")
     return resp
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "/", err: str = ""):
+    if current_person(request):
+        return RedirectResponse(next or "/")
+    return render(request, "login.html", next=next, err=err, ident="")
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_send(request: Request, ident: str = Form(...), next: str = Form("/"), passcode: str = Form("")):
+    person, channel, addr = _find_person(ident)
+    if not channel:
+        return render(request, "login.html", next=next, err="Enter a mobile number or an email address.", ident=ident)
+    if not person:
+        return render(request, "login.html", next=next, ident=ident,
+                      err="That number or email isn't set up for camera access yet. Ask Andrew to add you.")
+    if _locked(addr):
+        return render(request, "login.html", next=next, ident=ident, err="Too many attempts. Try again in 15 minutes.")
+    if passcode:
+        if sms.check_passcode(passcode, person["passcode_hash"]):
+            return _start_session(request, person, next)
+        _fail(addr)
+        return render(request, "login.html", next=next, ident=ident, err="Wrong passcode.")
+    recent = db.one("SELECT COUNT(*) n FROM otps WHERE phone=? AND created>?", addr, time.time() - 600)["n"]
+    if recent >= 4:
+        return render(request, "login.html", next=next, ident=ident, err="Too many codes sent. Try again in 10 minutes.")
+    code = f"{random.SystemRandom().randrange(0, 1000000):06d}"
+    db.run("DELETE FROM otps WHERE phone=? OR expires<?", addr, time.time())
+    db.run("INSERT INTO otps(phone,code,expires,created) VALUES(?,?,?,?)", addr, code, time.time() + 600, time.time())
+    msg = f"Your camera login code is {code}. It expires in 10 minutes."
+    if channel == "sms":
+        sms.send(addr, msg, kind="otp", person_id=person["id"])
+    else:
+        sms.send_email(addr, f"Camera login code {code}", msg, kind="otp", person_id=person["id"])
+    return render(request, "code.html", next=next, ident=addr, channel=channel, err="",
+                  has_passcode=bool(person["passcode_hash"]))
+
+
+@app.post("/login/code", response_class=HTMLResponse)
+def login_code(request: Request, ident: str = Form(...), code: str = Form(""), passcode: str = Form(""), next: str = Form("/")):
+    person, channel, addr = _find_person(ident)
+    if not person:
+        return RedirectResponse("/login", status_code=303)
+    ctx = dict(next=next, ident=addr, channel=channel, has_passcode=bool(person["passcode_hash"]))
+    if _locked(addr):
+        return render(request, "code.html", err="Too many attempts. Try again in 15 minutes.", **ctx)
+    if passcode:
+        if sms.check_passcode(passcode, person["passcode_hash"]):
+            db.run("DELETE FROM otps WHERE phone=?", addr)
+            return _start_session(request, person, next)
+        _fail(addr)
+        return render(request, "code.html", err="Wrong passcode.", **ctx)
+    row = db.one("SELECT rowid, * FROM otps WHERE phone=? ORDER BY created DESC LIMIT 1", addr)
+    code = "".join(ch for ch in code if ch.isdigit())
+    if not row or row["expires"] < time.time() or row["attempts"] >= 5 or row["code"] != code:
+        if row:
+            db.run("UPDATE otps SET attempts=attempts+1 WHERE rowid=?", row["rowid"])
+        _fail(addr)
+        return render(request, "code.html", err="Wrong or expired code.", **ctx)
+    db.run("DELETE FROM otps WHERE phone=?", addr)
+    return _start_session(request, person, next)
+
+
+@app.get("/account", response_class=HTMLResponse)
+def account(request: Request, msg: str = "", err: str = ""):
+    me = require(request)
+    sessions = db.one("SELECT COUNT(*) n FROM sessions WHERE person_id=?", me["id"])["n"]
+    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions)
+
+
+@app.post("/account/passcode")
+def account_passcode(request: Request, passcode: str = Form(""), passcode2: str = Form(""), clear: str = Form("")):
+    me = require(request)
+    if clear:
+        db.run("UPDATE people SET passcode_hash=NULL WHERE id=?", me["id"])
+        return RedirectResponse("/account?msg=Passcode+removed", status_code=303)
+    if len(passcode) < 6:
+        return RedirectResponse("/account?err=Use+at+least+6+characters", status_code=303)
+    if passcode != passcode2:
+        return RedirectResponse("/account?err=The+two+entries+don't+match", status_code=303)
+    db.run("UPDATE people SET passcode_hash=? WHERE id=?", sms.hash_passcode(passcode), me["id"])
+    return RedirectResponse("/account?msg=Passcode+saved", status_code=303)
+
+
+@app.post("/account/signout-everywhere")
+def signout_everywhere(request: Request):
+    me = require(request)
+    db.run("DELETE FROM sessions WHERE person_id=?", me["id"])
+    r = RedirectResponse("/login", status_code=303); r.delete_cookie("s")
+    return r
 
 
 @app.get("/dev/login")
@@ -525,22 +605,30 @@ async def admin_camera(request: Request, id: int = Form(...), name: str = Form(.
 
 
 @app.post("/admin/person")
-def admin_person(request: Request, name: str = Form(...), phone: str = Form(...), is_admin: int = Form(0),
-                 id: int = Form(0), delete: str = Form("")):
+def admin_person(request: Request, name: str = Form(...), phone: str = Form(...), email: str = Form(""),
+                 passcode: str = Form(""), is_admin: int = Form(0), id: int = Form(0), delete: str = Form("")):
     me = require(request, admin=True)
     ph = sms.normalize_phone(phone)
+    em = sms.normalize_email(email) if email.strip() else None
     if id and delete:
         if id != me["id"]:
             db.run("DELETE FROM people WHERE id=?", id)
-    elif not ph:
+        return RedirectResponse("/admin", status_code=303)
+    if not ph:
         return RedirectResponse("/admin?msg=Bad+phone+number", status_code=303)
-    elif id:
-        db.run("UPDATE people SET name=?, phone=?, is_admin=? WHERE id=?", name.strip(), ph, is_admin, id)
-    else:
-        try:
-            db.run("INSERT INTO people(name,phone,is_admin,created) VALUES(?,?,?,?)", name.strip(), ph, is_admin, time.time())
-        except Exception:
-            return RedirectResponse("/admin?msg=That+phone+number+already+exists", status_code=303)
+    if email.strip() and not em:
+        return RedirectResponse("/admin?msg=Bad+email+address", status_code=303)
+    try:
+        if id:
+            db.run("UPDATE people SET name=?, phone=?, email=?, is_admin=? WHERE id=?", name.strip(), ph, em, is_admin, id)
+        else:
+            id = db.run("INSERT INTO people(name,phone,email,is_admin,created) VALUES(?,?,?,?,?)", name.strip(), ph, em, is_admin, time.time())
+    except Exception:
+        return RedirectResponse("/admin?msg=That+phone+number+or+email+is+already+used", status_code=303)
+    if passcode.strip():
+        if len(passcode.strip()) < 6:
+            return RedirectResponse("/admin?msg=Passcode+must+be+at+least+6+characters", status_code=303)
+        db.run("UPDATE people SET passcode_hash=? WHERE id=?", sms.hash_passcode(passcode.strip()), id)
     return RedirectResponse("/admin", status_code=303)
 
 

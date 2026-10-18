@@ -43,3 +43,46 @@ def normalize_phone(raw):
     if len(d) == 11 and d.startswith("1"):
         return "+" + d
     return None
+
+
+# ------------------------------------------------------------------ email
+def normalize_email(raw):
+    e = (raw or "").strip().lower()
+    return e if "@" in e and "." in e.split("@")[-1] and " " not in e else None
+
+
+def send_email(to, subject, body, kind="misc", person_id=None):
+    """Plain-text mail from the Gmail account (app password), like the 180 Beatrice site."""
+    import smtplib
+    from email.message import EmailMessage
+    user = os.environ.get("GMAIL_USER"); pw = (os.environ.get("GMAIL_APP_PASSWORD") or "").replace(" ", "")
+    err = None
+    if not user or not pw:
+        log.info("EMAIL (not configured) to %s: %s", to, body); err = "gmail not configured"
+    else:
+        try:
+            m = EmailMessage(); m["From"] = f"Cameras <{user}>"; m["To"] = to; m["Subject"] = subject
+            m.set_content(body)
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
+                s.login(user, pw); s.send_message(m)
+        except Exception as e:
+            err = str(e)[:300]; log.warning("email to %s failed: %s", to, err)
+    db.run("INSERT INTO sms_log(person_id,phone,kind,body,at,sid,error) VALUES(?,?,?,?,?,?,?)",
+           person_id, to, kind, body, time.time(), None if err else "email", err)
+    return (None if err else "email"), err
+
+
+# ------------------------------------------------------------------ passcodes
+def hash_passcode(code):
+    import hashlib, secrets, base64
+    salt = secrets.token_bytes(16)
+    h = hashlib.pbkdf2_hmac("sha256", code.encode(), salt, 200_000)
+    return base64.b64encode(salt + h).decode()
+
+
+def check_passcode(code, stored):
+    import hashlib, hmac, base64
+    if not stored or not code:
+        return False
+    raw = base64.b64decode(stored); salt, h = raw[:16], raw[16:]
+    return hmac.compare_digest(hashlib.pbkdf2_hmac("sha256", code.encode(), salt, 200_000), h)

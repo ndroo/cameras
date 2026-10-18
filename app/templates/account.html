@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block title %}Account · Cameras{% endblock %}
+{% block body %}
+<div class="card narrow">
+  <h1>{{ me.name }}</h1>
+  <p class="muted">{{ me.phone }}{% if me.email %} · {{ me.email }}{% endif %}{% if me.is_admin %} · admin{% endif %}</p>
+  {% if msg %}<p class="notice">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
+  <h3>Passcode</h3>
+  <p class="muted small">{% if me.passcode_hash %}You have a passcode. You can sign in with it instead of waiting for a code.{% else %}Optional. Lets you sign in without waiting for a texted or emailed code.{% endif %}</p>
+  <form method="post" action="/account/passcode">
+    <label>New passcode (6+ characters)</label><input name="passcode" type="password" autocomplete="new-password" minlength="6">
+    <label>Again</label><input name="passcode2" type="password" autocomplete="new-password" minlength="6">
+    <button type="submit">Save passcode</button>
+    {% if me.passcode_hash %}<button type="submit" name="clear" value="1" class="secondary">Remove passcode</button>{% endif %}
+  </form>
+  <h3 style="margin-top:22px">Devices</h3>
+  <p class="muted small">Signed in on {{ sessions }} device{{ 's' if sessions != 1 else '' }}. Sign-ins last a year.</p>
+  <form method="post" action="/account/signout-everywhere"><button class="secondary">Sign out everywhere</button></form>
+</div>
+{% endblock %}

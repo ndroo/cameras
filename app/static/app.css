@@ -44,3 +44,5 @@ ul.events{list-style:none;padding:0;margin:0}ul.events li{padding:6px 0;border-b
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:10px 0}
 details.group{border-top:1px solid var(--line);padding:10px 0}details.group summary{cursor:pointer}
 @media (max-width:700px){.tbl{display:block;overflow-x:auto}}
+
+details.alt{margin-top:14px}details.alt summary{cursor:pointer;list-style:none;text-align:center}details.alt summary::-webkit-details-marker{display:none}

@@ -43,12 +43,14 @@
 <section class="card">
   <h2>People</h2>
   <table class="tbl">
-    <tr><th>Name</th><th>Mobile</th><th>Admin</th><th>Last seen</th><th></th></tr>
+    <tr><th>Name</th><th>Mobile</th><th>Email</th><th>Set passcode</th><th>Admin</th><th>Last seen</th><th></th></tr>
     {% for p in people %}
     <tr><form method="post" action="/admin/person">
       <input type="hidden" name="id" value="{{ p.id }}">
       <td><input name="name" value="{{ p.name }}"></td>
       <td><input name="phone" value="{{ p.phone }}"></td>
+      <td><input name="email" value="{{ p.email or '' }}" placeholder="optional"></td>
+      <td><input name="passcode" type="password" autocomplete="new-password" placeholder="{{ 'set ✓' if p.passcode_hash else 'none' }}"></td>
       <td><input type="checkbox" name="is_admin" value="1" {% if p.is_admin %}checked{% endif %}></td>
       <td class="muted small">{{ p.last_seen|ago }}</td>
       <td class="nowrap"><button class="secondary small">Save</button> {% if p.id != me.id %}<button class="danger small" name="delete" value="1" onclick="return confirm('Remove {{ p.name }}?')">✕</button>{% endif %}</td>
@@ -56,10 +58,11 @@
     {% endfor %}
     <tr><form method="post" action="/admin/person">
       <td><input name="name" placeholder="Name" required></td><td><input name="phone" placeholder="Mobile" required></td>
+      <td><input name="email" placeholder="Email (optional)"></td><td><input name="passcode" type="password" placeholder="optional"></td>
       <td><input type="checkbox" name="is_admin" value="1"></td><td></td><td><button class="small">Add</button></td>
     </form></tr>
   </table>
-  <p class="muted small">Admins see every camera and can change everything. Everyone else only sees what their groups allow.</p>
+  <p class="muted small">Admins see every camera and can change everything. Everyone else only sees what their groups allow. People sign in with a code texted to their mobile or emailed to them, or with their passcode (they can set their own under Account; you can set one here too).</p>
 </section>
 
 <section class="card">

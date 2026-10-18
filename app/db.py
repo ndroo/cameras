@@ -34,7 +34,14 @@ CREATE INDEX IF NOT EXISTS events_cam_at ON events(camera_id, at);
 CREATE TABLE IF NOT EXISTS sms_log (id INTEGER PRIMARY KEY, person_id INTEGER, phone TEXT, kind TEXT, body TEXT,
   at REAL, sid TEXT, error TEXT);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS login_fails (ident TEXT PRIMARY KEY, count INTEGER DEFAULT 0, until REAL);
 """
+
+MIGRATIONS = [
+    "ALTER TABLE people ADD COLUMN email TEXT",
+    "ALTER TABLE people ADD COLUMN passcode_hash TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS people_email ON people(email)",
+]
 
 
 def connect():
@@ -55,6 +62,12 @@ def conn():
         _conn = connect()
         with _conn:
             _conn.executescript(SCHEMA)
+        for m in MIGRATIONS:
+            try:
+                with _conn:
+                    _conn.execute(m)
+            except sqlite3.OperationalError:
+                pass  # already applied
     return _conn
 
 

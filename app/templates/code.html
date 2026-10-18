@@ -1,16 +1,23 @@
 {% extends "base.html" %}{% block title %}Enter code · Cameras{% endblock %}
 {% block body %}
 <div class="card narrow">
-  <h1>Check your texts</h1>
-  <p class="muted">We sent a 6-digit code to {{ phone }}.</p>
+  <h1>{% if channel == 'email' %}Check your email{% else %}Check your texts{% endif %}</h1>
+  <p class="muted">We sent a 6-digit code to {{ ident }}.</p>
   {% if err %}<p class="err">{{ err }}</p>{% endif %}
   <form method="post" action="/login/code">
     <input type="hidden" name="next" value="{{ next }}">
-    <input type="hidden" name="phone" value="{{ phone }}">
+    <input type="hidden" name="ident" value="{{ ident }}">
     <label>Code</label>
-    <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" autofocus required>
+    <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" autofocus>
     <button type="submit">Sign in</button>
+    {% if has_passcode %}
+    <details class="alt"><summary class="muted small">Use your passcode instead</summary>
+      <label>Passcode</label>
+      <input name="passcode" type="password" autocomplete="current-password">
+      <button type="submit" class="secondary">Sign in with passcode</button>
+    </details>
+    {% endif %}
   </form>
-  <p class="muted small"><a href="/login">Use a different number</a></p>
+  <p class="muted small"><a href="/login">Start over</a></p>
 </div>
 {% endblock %}

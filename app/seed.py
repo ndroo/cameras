@@ -21,6 +21,9 @@ def main():
     if admin_phone and not db.one("SELECT id FROM people WHERE phone=?", admin_phone):
         db.run("INSERT INTO people(name,phone,is_admin,created) VALUES(?,?,1,?)", os.environ.get("ADMIN_NAME", "Admin"), admin_phone, time.time())
     admin = db.one("SELECT * FROM people WHERE phone=?", admin_phone) if admin_phone else None
+    admin_email = sms.normalize_email(os.environ.get("ADMIN_EMAIL", ""))
+    if admin and admin_email and not admin["email"]:
+        db.run("UPDATE people SET email=? WHERE id=?", admin_email, admin["id"])
 
     cloud = tapo.TapoCloud(os.environ["TPLINK_EMAIL"], os.environ["TPLINK_PASSWORD"], os.environ.get("TPLINK_TERMINAL_UUID"))
     n = 0
