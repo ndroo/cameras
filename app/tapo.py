@@ -168,12 +168,12 @@ class MqttSession:
             self._connected.clear()
 
         c.on_connect, c.on_disconnect, c.on_message = on_connect, on_disconnect, self._on_message
+        self._c = c                      # before connect: request_relay may run as soon as on_connect fires
         c.connect(host, 443, keepalive=235)
         c.loop_start()
         if not ev.wait(20) or rc_box.get("rc") != 0:
             c.loop_stop()
             raise RuntimeError(f"MQTT connect failed rc={rc_box.get('rc')}")
-        self._c = c
         c.subscribe([(f"$tpiot/app/{self.client_id}/refresh/reply", 1),
                      (f"$tpiot/apps/{APP}/{self.cloud.term}/api/reply", 1)])
         for t in list(self._subs):
@@ -211,8 +211,10 @@ class MqttSession:
     def connected(self):
         return self._connected.is_set()
 
-    def request_relay(self, device_id, timeout=12, resolution="HD"):
+    def request_relay(self, device_id, timeout=12, resolution="HD", stream_type=0):
         """Ask the camera (via the cloud) for a relay slot. Returns (relayUrl, relayToken).
+        stream_type 0 = live preview (the camera streams as soon as we connect);
+        1 = a plain session that waits for requests (used for SD-card playback).
         Raises RuntimeError with the device's error when it is offline."""
         if not self._connected.wait(15):
             raise RuntimeError("MQTT not connected")
@@ -224,7 +226,7 @@ class MqttSession:
             self._c.subscribe(reply_topic, 1)
             param = {"userToken": f"ut|{self.cloud.login()}", "timestamp": int(time.time() * 1000),
                      "requestRelayParams": {"relayParamsJson": {
-                         "deviceId": device_id, "deviceType": "SMART.IPCAMERA", "cloudType": 2, "streamType": 0,
+                         "deviceId": device_id, "deviceType": "SMART.IPCAMERA", "cloudType": 2, "streamType": stream_type,
                          "preConnection": 0, "resolution": resolution, "playerId": str(uuid.uuid4()).upper(),
                          "rootCaVer": "1", "dataTimeoutCount": 0}},
                      "clientToken": f"{device_id}_{int(time.time())}", "userAgent": f"{APP}/{VER}",
@@ -321,3 +323,118 @@ def iter_ts(sock, timeout=20):
     for hdr, body in iter_parts(sock, timeout):
         if hdr.get("content-type", "").startswith("video/mp2t"):
             yield body
+
+
+# -------------------------------------------------------------------- device calls via the cloud
+APP_SERVER = "https://use1-app-server.iot.i.tplinknbu.com"
+
+
+def device_call(cloud: TapoCloud, device_id, requests_list, timeout=40):
+    """Run camera API methods through the cloud ("passthrough" thing service).
+    Returns the list of per-method responses ({method, result, error_code})."""
+    urls = cloud.service_urls(["nbu.iot-app-server.app"])
+    base = urls.get("nbu.iot-app-server.app") or APP_SERVER
+    if not base.startswith("http"):
+        base = "https://" + base
+    body = {"serviceId": "passthrough", "inputParams": {"requestData": {"method": "multipleRequest", "params": {"requests": requests_list}}}}
+    for attempt in (0, 1):
+        h = {"Content-Type": "application/json; charset=UTF-8", "Authorization": f"ut|{cloud.login(force=bool(attempt))}",
+             "app-cid": f"app:{APP}:{cloud.term}"}
+        r = requests.post(f"{base}/v1/things/{device_id}/services-sync", headers=h, json=body, verify=False, timeout=timeout)
+        if r.status_code in (401, 403) and attempt == 0:
+            continue
+        if r.status_code != 200:
+            raise RuntimeError(f"device call {r.status_code}: {r.text[:200]}")
+        j = r.json()
+        rd = (j.get("outputParams") or {}).get("responseData") or {}
+        if rd.get("error_code", 0) != 0:
+            raise RuntimeError(f"device error {rd.get('error_code')}")
+        return (rd.get("result") or {}).get("responses", [])
+    raise RuntimeError("device call failed")
+
+
+def _unwrap_list(items):
+    """The camera returns lists as [{"x_1": {...}}, {"x_2": {...}}]; flatten to [{...}, ...]."""
+    out = []
+    for it in items or []:
+        for _, v in it.items():
+            out.append(v)
+    return out
+
+
+def recording_dates(cloud, device_id, start="20000101", end=None):
+    end = end or time.strftime("%Y%m%d")
+    r = device_call(cloud, device_id, [{"method": "searchDateWithVideo", "params": {"playback": {"search_year_utility": {"channel": [0], "end_date": end, "start_date": start}}}}])
+    res = r[0].get("result", {}).get("playback", {}) if r else {}
+    return [d["date"] for d in _unwrap_list(res.get("search_results"))]
+
+
+_user_ids = {}
+
+
+def user_id(cloud, device_id):
+    """The camera's own id for this account, needed by the playback methods (differs per camera)."""
+    if device_id not in _user_ids:
+        r = device_call(cloud, device_id, [{"method": "getUserID", "params": {"system": {"get_user_id": "null"}}}])
+        _user_ids[device_id] = int(r[0].get("result", {}).get("user_id", 0)) if r else 0
+    return _user_ids[device_id]
+
+
+def recordings_of_day(cloud, device_id, date):
+    """Clips on one day (YYYYMMDD) as [{start, end, type}] in epoch seconds."""
+    uid = user_id(cloud, device_id)
+    r = device_call(cloud, device_id, [{"method": "searchVideoOfDay", "params": {"playback": {"search_video_utility": {"channel": 0, "date": date, "end_index": 999, "id": uid, "start_index": 0}}}}])
+    res = r[0] if r else {}
+    if res.get("error_code"):
+        raise RuntimeError(f"searchVideoOfDay error {res['error_code']}")
+    clips = _unwrap_list(res.get("result", {}).get("playback", {}).get("search_video_results"))
+    return [{"start": int(c["startTime"]), "end": int(c["endTime"]), "type": c.get("vedio_type")} for c in clips]
+
+
+def sd_status(cloud, device_id):
+    r = device_call(cloud, device_id, [{"method": "getSdCardStatus", "params": {"harddisk_manage": {"table": "hd_info"}}}])
+    info = _unwrap_list(r[0].get("result", {}).get("harddisk_manage", {}).get("hd_info")) if r else []
+    log.info("sd status %s: %s", device_id[:8], json.dumps(info)[:400])
+    return info[0] if info else None
+
+
+def _client_part(obj):
+    data = json.dumps(obj, separators=(",", ":")).encode()
+    return (b"--" + CLIENT_BOUNDARY.encode() + b"\r\nContent-Type: application/json\r\nContent-Length: "
+            + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n")
+
+
+def iter_recording(mq, device_id, term, start, end, mode="download", timeout=25, cloud=None):
+    """Yield MPEG-TS bytes of the SD-card recording between two epoch times.
+    mode "download" = as fast as the link allows (what the app uses for clips),
+    "playback" = paced at real time."""
+    uid = user_id(cloud, device_id) if cloud else 1
+    url, tok = mq.request_relay(device_id, timeout=15, stream_type=1)
+    sock = connect_relay(url, tok, term)
+    if mode == "download":
+        params = {"download": {"client_id": uid, "channels": [0], "media_type": 0, "start_time": str(int(start)),
+                               "end_time": str(int(end)), "player_id": str(uuid.uuid4()).upper()}, "method": "get"}
+    else:
+        params = {"playback": {"client_id": uid, "channels": [0, 1], "scale": "1/1", "start_time": str(int(start)),
+                               "end_time": str(int(end)), "event_type": [1, 2]}, "method": "get"}
+    sock.sendall(_client_part({"type": "request", "seq": 1, "params": params}))
+    try:
+        for hdr, body in iter_parts(sock, timeout=timeout):
+            ct = hdr.get("content-type", "")
+            if ct.startswith("video/mp2t"):
+                yield body
+            elif "json" in ct:
+                try:
+                    j = json.loads(body)
+                except Exception:
+                    continue
+                p = j.get("params", {})
+                if j.get("type") == "response" and p.get("error_code", 0) != 0:
+                    raise RuntimeError(f"camera refused playback: {p.get('error_code')}")
+                if j.get("type") == "notification" and (
+                        (p.get("event_type") == "stream_status" and p.get("status") == "finished")
+                        or p.get("event_type") == "connection_closed"):
+                    return
+    finally:
+        try: sock.close()
+        except Exception: pass

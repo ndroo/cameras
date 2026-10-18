@@ -46,3 +46,6 @@ details.group{border-top:1px solid var(--line);padding:10px 0}details.group summ
 @media (max-width:700px){.tbl{display:block;overflow-x:auto}}
 
 details.alt{margin-top:14px}details.alt summary{cursor:pointer;list-style:none;text-align:center}details.alt summary::-webkit-details-marker{display:none}
+.btn{display:inline-block;padding:8px 10px;font-size:14px;font-weight:600;border-radius:10px;background:var(--line);color:var(--fg)}
+ul.clips a{color:var(--fg);display:block}ul.clips a.on{color:var(--acc)}
+.stage video#clip{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}

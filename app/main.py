@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import httpx, websockets
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -426,6 +426,102 @@ def internal_relay(request: Request, device_id: str):
     except Exception as e:
         raise HTTPException(503, str(e))
     return {"relayUrl": url, "relayToken": tok, "term": cloud.term}
+
+
+# ------------------------------------------------------------------ recordings (SD card)
+MAX_CLIP_SECONDS = int(os.environ.get("MAX_CLIP_SECONDS", "900"))
+_playback_locks = {}
+
+
+def _plock(cam_id):
+    return _playback_locks.setdefault(cam_id, threading.Lock())
+
+
+@app.get("/cam/{cam_id}/recordings", response_class=HTMLResponse)
+async def recordings_page(request: Request, cam_id: int, date: str = "", at: str = ""):
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404, "No such camera")
+    cam = db.one("SELECT c.*, h.name AS house_name FROM cameras c LEFT JOIN houses h ON h.id=c.house_id WHERE c.id=?", cam_id)
+    loop = asyncio.get_event_loop()
+    err = None; dates = []; clips = []; sd = None
+    try:
+        start = (datetime.now(TZ) - __import__("datetime").timedelta(days=60)).strftime("%Y%m%d")
+        dates, sd = await loop.run_in_executor(None, lambda: (tapo.recording_dates(cloud, cam["device_id"], start=start),
+                                                             tapo.sd_status(cloud, cam["device_id"])))
+        dates = sorted(dates, reverse=True)
+        if not date and dates:
+            date = dates[0]
+        if date:
+            clips = await loop.run_in_executor(None, tapo.recordings_of_day, cloud, cam["device_id"], date)
+    except Exception as e:
+        err = str(e)[:200]
+    for c in clips:
+        c["start_s"] = datetime.fromtimestamp(c["start"], TZ).strftime("%-I:%M %p")
+        c["end_s"] = datetime.fromtimestamp(c["end"], TZ).strftime("%-I:%M %p")
+        c["mins"] = max(1, round((c["end"] - c["start"]) / 60))
+    sel = None
+    if at:
+        try:
+            t = int(at)
+            sel = next((c for c in clips if c["start"] <= t < c["end"]), None)
+            if sel:
+                sel = dict(sel, start=t, end=min(sel["end"], t + MAX_CLIP_SECONDS))
+        except ValueError:
+            pass
+    return render(request, "recordings.html", cam=cam, dates=dates, date=date, clips=clips, sel=sel, sd=sd, err=err, me=me,
+                  max_clip=MAX_CLIP_SECONDS)
+
+
+@app.get("/stream/{cam_id}/clip.mp4")
+async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download: int = 0):
+    """SD-card recording between two epoch times, remuxed on the fly to a
+    fragmented MP4 the browser can play as it arrives."""
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404)
+    if end <= start:
+        raise HTTPException(400, "end must be after start")
+    end = min(end, start + MAX_CLIP_SECONDS)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    lock = _plock(cam_id)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, "Someone is already playing back from this camera. Try again in a moment.")
+    ff = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-map", "0:v", "-c", "copy",
+                           "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    state = {"err": None}
+
+    def feed():
+        try:
+            for chunk in tapo.iter_recording(mq, cam["device_id"], cloud.term, start, end, cloud=cloud):
+                ff.stdin.write(chunk)
+        except Exception as e:
+            state["err"] = str(e); log.info("clip feed cam%s: %s", cam_id, e)
+        finally:
+            try: ff.stdin.close()
+            except Exception: pass
+
+    t = threading.Thread(target=feed, daemon=True); t.start()
+
+    async def body():
+        loop = asyncio.get_event_loop()
+        try:
+            while True:
+                data = await loop.run_in_executor(None, ff.stdout.read, 65536)
+                if not data:
+                    break
+                yield data
+        finally:
+            try: ff.kill()
+            except Exception: pass
+            lock.release()
+
+    name = f"{cam['name']}-{datetime.fromtimestamp(start, TZ).strftime('%Y%m%d-%H%M%S')}.mp4".replace(" ", "_")
+    headers = {"Cache-Control": "no-store"}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    return StreamingResponse(body(), media_type="video/mp4", headers=headers)
 
 
 # ------------------------------------------------------------------ events + alerts
