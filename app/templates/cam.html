@@ -34,9 +34,6 @@
     <ul class="events">{% for e in events %}<li><b>{{ e.kind }}</b> <span class="muted">{{ e.at|dt }}</span></li>{% endfor %}</ul>
   </div>
 </div>
-<script type="module">
-import { VideoStream } from "/static/video-stream.js";
-customElements.define("video-stream", VideoStream);
-</script>
+<script type="module" src="/static/video-stream.js"></script>
 <script type="module" src="/static/player.js"></script>
 {% endblock %}
