@@ -487,7 +487,10 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     lock = _plock(cam_id)
     if not lock.acquire(blocking=False):
         raise HTTPException(409, "Someone is already playing back from this camera. Try again in a moment.")
-    ff = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-map", "0:v", "-c", "copy",
+    # small probe window + flush per packet so the first fragment leaves as soon as the
+    # camera sends it (ffmpeg's default 5 MB probe would hold a whole short clip back)
+    ff = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-probesize", "300000", "-analyzeduration", "500000",
+                           "-fflags", "nobuffer", "-i", "pipe:0", "-map", "0:v", "-c", "copy", "-flush_packets", "1",
                            "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"],
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     state = {"err": None}

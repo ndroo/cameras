@@ -383,10 +383,15 @@ def user_id(cloud, device_id):
 def recordings_of_day(cloud, device_id, date):
     """Clips on one day (YYYYMMDD) as [{start, end, type}] in epoch seconds."""
     uid = user_id(cloud, device_id)
-    r = device_call(cloud, device_id, [{"method": "searchVideoOfDay", "params": {"playback": {"search_video_utility": {"channel": 0, "date": date, "end_index": 999, "id": uid, "start_index": 0}}}}])
-    res = r[0] if r else {}
+    res = {}
+    for attempt in range(4):   # the camera answers -71103 while its card is busy (e.g. a playback just ended)
+        r = device_call(cloud, device_id, [{"method": "searchVideoOfDay", "params": {"playback": {"search_video_utility": {"channel": 0, "date": date, "end_index": 999, "id": uid, "start_index": 0}}}}])
+        res = r[0] if r else {}
+        if not res.get("error_code"):
+            break
+        time.sleep(1.5)
     if res.get("error_code"):
-        raise RuntimeError(f"searchVideoOfDay error {res['error_code']}")
+        raise RuntimeError(f"the camera is busy (error {res['error_code']}), try again in a moment")
     clips = _unwrap_list(res.get("result", {}).get("playback", {}).get("search_video_results"))
     return [{"start": int(c["startTime"]), "end": int(c["endTime"]), "type": c.get("vedio_type")} for c in clips]
 
