@@ -1,5 +1,5 @@
 """Twilio SMS.  Without credentials, messages are logged instead of sent."""
-import os, time, logging
+import os, re, time, logging
 from . import db
 
 log = logging.getLogger("sms")
@@ -13,6 +13,11 @@ def _client():
     if os.environ.get("TWILIO_API_KEY_SID"):
         return Client(os.environ["TWILIO_API_KEY_SID"], os.environ["TWILIO_API_KEY_SECRET"], sid)
     return Client(sid, os.environ.get("TWILIO_AUTH_TOKEN", ""))
+
+
+def _logged(body, kind):
+    """Never keep one-time codes in the log."""
+    return re.sub(r"\b\d{6}\b", "••••••", body) if kind == "otp" else body
 
 
 def send(phone, body, kind="misc", person_id=None):
@@ -29,7 +34,7 @@ def send(phone, body, kind="misc", person_id=None):
             err = str(e)[:300]
             log.warning("SMS to %s failed: %s", phone, err)
     db.run("INSERT INTO sms_log(person_id,phone,kind,body,at,sid,error) VALUES(?,?,?,?,?,?,?)",
-           person_id, phone, kind, body, time.time(), sid, err)
+           person_id, phone, kind, _logged(body, kind), time.time(), sid, err)
     return sid, err
 
 
@@ -68,7 +73,7 @@ def send_email(to, subject, body, kind="misc", person_id=None):
         except Exception as e:
             err = str(e)[:300]; log.warning("email to %s failed: %s", to, err)
     db.run("INSERT INTO sms_log(person_id,phone,kind,body,at,sid,error) VALUES(?,?,?,?,?,?,?)",
-           person_id, to, kind, body, time.time(), None if err else "email", err)
+           person_id, to, kind, _logged(body, kind), time.time(), None if err else "email", err)
     return (None if err else "email"), err
 
 
