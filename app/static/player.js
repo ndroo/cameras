@@ -44,7 +44,7 @@ player.querySelector(".controls").addEventListener("click", async ev => {
 // show the live picture once frames arrive
 const v = vs.video;
 if (v) {
-  v.setAttribute("playsinline", ""); v.muted = true;
+  v.setAttribute("playsinline", ""); v.muted = true; v.controls = false;
   v.addEventListener("playing", () => { stage.classList.add("live"); layout(); });
   v.addEventListener("loadedmetadata", layout);
   v.addEventListener("waiting", () => stage.classList.remove("live"));
