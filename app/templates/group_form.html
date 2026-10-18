@@ -1,0 +1,18 @@
+<form method="post" action="/admin/group" class="gform">
+  {% if g %}<input type="hidden" name="id" value="{{ g.id }}">{% endif %}
+  <div class="line"><label>Name</label><input name="name" value="{{ g.name if g else '' }}" placeholder="e.g. Tenants, Owners" required>
+    <label>House</label><select name="house_id" required>{% for h in houses %}<option value="{{ h.id }}" {% if g and h.id == g.house_id %}selected{% endif %}>{{ h.name }}</option>{% endfor %}</select></div>
+  <div class="cols">
+    <div><b>Members</b>{% for p in people %}<label class="chk block"><input type="checkbox" name="members" value="{{ p.id }}" {% if g and p.name in members.get(g.id, []) %}checked{% endif %}>{{ p.name }}</label>{% endfor %}</div>
+    <div><b>Cameras</b>
+      <label class="chk block"><input type="checkbox" name="all_cameras" value="1" {% if not g or g.all_cameras %}checked{% endif %}>All cameras in the house</label>
+      <div class="muted tiny">or only these:</div>
+      {% for c in cams %}<label class="chk block"><input type="checkbox" name="cameras" value="{{ c.id }}" {% if g and c.name in gcams.get(g.id, []) %}checked{% endif %}>{{ c.name }} <span class="muted tiny">{{ c.house_name or '' }}</span></label>{% endfor %}</div>
+    <div><b>Text alerts</b>
+      <label class="chk block"><input type="checkbox" name="notify_doorbell" value="1" {% if g and g.notify_doorbell %}checked{% endif %}>Doorbell pressed</label>
+      <label class="chk block"><input type="checkbox" name="notify_tamper" value="1" {% if g and g.notify_tamper %}checked{% endif %}>Camera tampered with</label>
+      <label class="chk block"><input type="checkbox" name="notify_offline" value="1" {% if g and g.notify_offline %}checked{% endif %}>Camera offline / back online</label>
+      <label class="chk block"><input type="checkbox" name="notify_motion" value="1" {% if g and g.notify_motion %}checked{% endif %}>Motion / person (noisy)</label></div>
+  </div>
+  <div class="line"><button class="small">Save group</button> {% if g %}<button class="danger small" name="delete" value="1" onclick="return confirm('Delete this group?')">Delete</button>{% endif %}</div>
+</form>

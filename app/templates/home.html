@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block body %}
+{% if not houses %}
+  <div class="card narrow"><h1>No cameras yet</h1><p class="muted">{% if me.is_admin %}Head to <a href="/admin">Admin</a> to import cameras from the Tapo account and set up houses.{% else %}You haven't been given access to any cameras yet.{% endif %}</p></div>
+{% endif %}
+{% for h in houses %}
+<section class="house">
+  <h2>{{ h.name }}</h2>
+  <div class="grid">
+    {% for c in h.cams %}
+    <a class="tile" href="/cam/{{ c.id }}">
+      <div class="thumb" data-rotate="{{ c.rotate }}" data-fh="{{ c.flip_h }}" data-fv="{{ c.flip_v }}">
+        <img src="/stream/{{ c.id }}/thumb.jpg?t={{ c.thumb_at|int }}" alt="" loading="lazy">
+      </div>
+      <div class="tileBody">
+        <span class="name">{{ c.name }}</span>
+        <span class="status"><span class="dot {{ 'ok' if c.online == 1 else ('bad' if c.online == 0 else 'unk') }}"></span>
+          {% if c.online == 1 %}Online{% elif c.online == 0 %}Offline since {{ c.online_since|ago }}{% else %}Checking…{% endif %}
+          {% if c.thumb_at %}<span class="muted"> · {{ c.thumb_at|ago }}</span>{% endif %}</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+<script type="module" src="/static/orient.js"></script>
+{% endblock %}

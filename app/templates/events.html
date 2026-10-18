@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block title %}Events · Cameras{% endblock %}
+{% block body %}
+<h1>Events</h1>
+{% if not events %}<p class="muted">No events yet. Doorbell presses, tamper alerts and cameras going offline or back online show up here.</p>{% endif %}
+<ul class="events big">
+{% for e in events %}
+  <li><span class="kind {{ e.kind }}">{{ e.kind }}</span> <a href="/cam/{{ e.camera_id }}">{{ e.cam_name }}</a> <span class="muted">{{ e.house_name or '' }} · {{ e.at|dt }}</span></li>
+{% endfor %}
+</ul>
+{% endblock %}

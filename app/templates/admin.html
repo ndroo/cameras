@@ -1,0 +1,83 @@
+{% extends "base.html" %}{% block title %}Admin · Cameras{% endblock %}
+{% block body %}
+<h1>Admin</h1>
+{% if msg %}<p class="notice">{{ msg }}</p>{% endif %}
+<p class="muted small">Tapo cloud link: <span class="dot {{ 'ok' if mqtt_ok else 'bad' }}"></span>{{ 'connected' if mqtt_ok else 'not connected' }}
+ · <a href="/admin/mqtt-log">raw device messages</a>
+ · <form method="post" action="/admin/test-sms" class="inline"><button class="link">send me a test text</button></form></p>
+
+<section class="card">
+  <h2>Houses</h2>
+  {% for h in houses %}
+  <form method="post" action="/admin/house" class="line">
+    <input type="hidden" name="id" value="{{ h.id }}">
+    <input name="name" value="{{ h.name }}"> <input name="sort" type="number" value="{{ h.sort }}" class="tiny" title="order">
+    <button class="secondary small">Save</button> <button class="danger small" name="delete" value="1" onclick="return confirm('Delete this house? Its groups go too.')">Delete</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="/admin/house" class="line"><input name="name" placeholder="New house, e.g. 180 Beatrice"> <button class="small">Add house</button></form>
+</section>
+
+<section class="card">
+  <h2>Cameras</h2>
+  <form method="post" action="/admin/import" class="line"><button class="small">Import cameras from the Tapo account</button> <span class="muted small">finds any camera or doorbell on the account that isn't here yet</span></form>
+  <table class="tbl">
+    <tr><th>Name</th><th>House</th><th>Orientation</th><th>Order</th><th>On</th><th>Status</th><th></th></tr>
+    {% for c in cams %}
+    <tr><form method="post" action="/admin/camera">
+      <input type="hidden" name="id" value="{{ c.id }}">
+      <td><input name="name" value="{{ c.name }}"><div class="muted tiny">{{ c.model }} · {{ c.device_id[:8] }}…</div></td>
+      <td><select name="house_id"><option value="0">—</option>{% for h in houses %}<option value="{{ h.id }}" {% if h.id == c.house_id %}selected{% endif %}>{{ h.name }}</option>{% endfor %}</select></td>
+      <td><select name="rotate">{% for r in [0,90,180,270] %}<option value="{{ r }}" {% if c.rotate == r %}selected{% endif %}>{{ r }}°</option>{% endfor %}</select>
+          <label class="chk"><input type="checkbox" name="flip_h" value="1" {% if c.flip_h %}checked{% endif %}>mirror</label>
+          <label class="chk"><input type="checkbox" name="flip_v" value="1" {% if c.flip_v %}checked{% endif %}>flip</label></td>
+      <td><input name="sort" type="number" value="{{ c.sort }}" class="tiny"></td>
+      <td><input type="checkbox" name="enabled" value="1" {% if c.enabled %}checked{% endif %}></td>
+      <td><span class="dot {{ 'ok' if c.online == 1 else ('bad' if c.online == 0 else 'unk') }}"></span><span class="muted tiny">{{ c.last_check|ago }}</span></td>
+      <td class="nowrap"><button class="secondary small">Save</button> <button class="danger small" name="delete" value="1" onclick="return confirm('Remove this camera?')">✕</button></td>
+    </form></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>People</h2>
+  <table class="tbl">
+    <tr><th>Name</th><th>Mobile</th><th>Admin</th><th>Last seen</th><th></th></tr>
+    {% for p in people %}
+    <tr><form method="post" action="/admin/person">
+      <input type="hidden" name="id" value="{{ p.id }}">
+      <td><input name="name" value="{{ p.name }}"></td>
+      <td><input name="phone" value="{{ p.phone }}"></td>
+      <td><input type="checkbox" name="is_admin" value="1" {% if p.is_admin %}checked{% endif %}></td>
+      <td class="muted small">{{ p.last_seen|ago }}</td>
+      <td class="nowrap"><button class="secondary small">Save</button> {% if p.id != me.id %}<button class="danger small" name="delete" value="1" onclick="return confirm('Remove {{ p.name }}?')">✕</button>{% endif %}</td>
+    </form></tr>
+    {% endfor %}
+    <tr><form method="post" action="/admin/person">
+      <td><input name="name" placeholder="Name" required></td><td><input name="phone" placeholder="Mobile" required></td>
+      <td><input type="checkbox" name="is_admin" value="1"></td><td></td><td><button class="small">Add</button></td>
+    </form></tr>
+  </table>
+  <p class="muted small">Admins see every camera and can change everything. Everyone else only sees what their groups allow.</p>
+</section>
+
+<section class="card">
+  <h2>Groups</h2>
+  <p class="muted small">A group belongs to one house. Its members can watch the house's cameras (all of them, or just the ticked ones) and get the texts it has turned on.</p>
+  {% for g in groups %}
+  <details class="group">
+    <summary><b>{{ g.name }}</b> <span class="muted">· {{ g.house_name }} · {{ members.get(g.id, [])|join(', ') or 'no members' }}
+      · {{ 'all cameras' if g.all_cameras else (gcams.get(g.id, [])|join(', ') or 'no cameras') }}
+      {% if g.notify_doorbell %}· 🔔 doorbell{% endif %}{% if g.notify_tamper %}· ⚠️ tamper{% endif %}{% if g.notify_offline %}· 📴 offline{% endif %}{% if g.notify_motion %}· 🚶 motion{% endif %}</span></summary>
+    {% with g=g %}{% include "group_form.html" %}{% endwith %}
+  </details>
+  {% endfor %}
+  <details class="group"><summary><b>+ New group</b></summary>{% with g=None %}{% include "group_form.html" %}{% endwith %}</details>
+</section>
+
+<section class="card">
+  <h2>Recent texts</h2>
+  <table class="tbl small">{% for s in recent_sms %}<tr><td class="muted">{{ s.at|dt }}</td><td>{{ s.phone }}</td><td>{{ s.kind }}</td><td>{{ s.body }}</td><td class="err">{{ s.error or '' }}</td></tr>{% endfor %}</table>
+</section>
+{% endblock %}
