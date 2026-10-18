@@ -60,15 +60,26 @@ DNS: A/AAAA records at Cloudflare, DNS-only, to the Fly IPs.
   relay request is.
 - Vendored from go2rtc v1.9.14: `app/static/video-rtc.js`, `video-stream.js`.
 
+## Recordings (SD card)
+
+`/cam/<id>/recordings`: a month calendar (dots = days with footage), a 24-hour bar for
+the chosen day shaded where the card has footage, and a one-hour strip around the
+playhead for fine scrubbing. Drag or tap either bar to start playing from that time;
+the playhead follows the video and the next chunk loads automatically. "Save" downloads
+the chunk as an MP4.
+
+How it works (`app/tapo.py`): camera API methods run through the cloud with the IoT
+thing service (`POST /v1/things/<deviceId>/services-sync`, serviceId `passthrough`,
+headers `Authorization: ut|<token>` and `app-cid: app:TP-Link_Tapo_Android:<uuid>`):
+`searchDateWithVideo` for days, `searchVideoOfDay` for clips (needs the camera's own
+`getUserID`; `-71103` means the card is busy, retried), `getSdCardStatus`. Playback
+asks for a relay with `streamType: 1` and writes one JSON part into the client
+multipart body (`download` = as fast as the link allows, `playback` = real time);
+the camera answers with a session id and MPEG-TS parts, and a `stream_status finished`
+notification at the end. ffmpeg remuxes to fragmented MP4 with a small probe window
+so the browser starts within a few seconds. One playback per camera at a time.
+
 ## Next steps
 
-- **SD-card playback** (recordings): the Tapo app lists clips with the device methods
-  `searchVideoOfDay` / `searchDateWithVideo` / `searchVideoWithUTC` / `searchDetectionList`
-  (`com/tplink/libtapocameranetwork/model/Method.java` in the decompiled APK), sent
-  through the cloud as a `passthrough` thing-service call (`ThingServiceParams`
-  serviceId `passthrough`, `requestData` = `{method: multipleRequest, params: {requests: [...]}}`),
-  and streams playback through the same relay (`StreamType.STREAM_TYPE_PLAYBACK`).
-  The exact playback request written into the relay's client multipart body still
-  needs to be captured from the real app (the mitmproxy/frida setup in `~/tapo/intercept`).
 - Audio: identify the private-stream audio codec in the TS and remux it.
 - Two-way talk, PTZ: not planned.

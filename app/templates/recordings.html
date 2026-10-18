@@ -5,49 +5,32 @@
   <h1>Recordings <span class="muted">{{ cam.name }}</span></h1>
 </div>
 {% if err %}<p class="err">Couldn't reach the camera's card: {{ err }}</p>{% endif %}
-{% if sd %}<p class="muted small">Card: {{ sd.video_total_space if sd.total_space == '0B' else sd.total_space }}, {{ sd.free_space }} free{% if sd.loop_record_status == '1' %}, oldest footage is overwritten as it fills{% endif %}{% if sd.status != 'normal' %} · status {{ sd.status }}{% endif %}</p>{% endif %}
 
-{% if sel %}
-<div class="player" id="player" data-rotate="{{ cam.rotate }}" data-fh="{{ cam.flip_h }}" data-fv="{{ cam.flip_v }}" data-cam="{{ cam.id }}">
-  <div class="stage live"><video id="clip" controls playsinline autoplay src="/stream/{{ cam.id }}/clip.mp4?start={{ sel.start }}&end={{ sel.end }}"></video></div>
+<div class="recWrap">
+<div class="player" id="player">
+  <div class="stage"><video id="clip" controls playsinline muted poster="/stream/{{ cam.id }}/thumb.jpg?t={{ cam.thumb_at|int }}"></video>
+    <div class="spinner" id="hint">Pick a day and drag the timeline to a time</div></div>
   <div class="controls">
-    <span class="small">{{ sel.start|dt }} → {{ sel.end|dt }}</span>
-    <a class="btn" href="/stream/{{ cam.id }}/clip.mp4?start={{ sel.start }}&end={{ sel.end }}&download=1">⬇ Save</a>
-    <a class="btn" href="/cam/{{ cam.id }}/recordings?date={{ date }}&at={{ sel.start - max_clip }}">« {{ (max_clip // 60) }} min</a>
-    <a class="btn" href="/cam/{{ cam.id }}/recordings?date={{ date }}&at={{ sel.end }}">{{ (max_clip // 60) }} min »</a>
+    <span class="small" id="label">–</span>
+    <a class="btn" id="save" href="#" style="display:none">⬇ Save</a>
+    <span class="muted small" id="status"></span>
   </div>
 </div>
-<script type="module">
-import { applyToBox } from "/static/orient.js";
-const p = document.getElementById("player"), st = p.querySelector(".stage"), v = document.getElementById("clip");
-const rot = +p.dataset.rotate, fh = +p.dataset.fh, fv = +p.dataset.fv;
-function lay() {
-  const side = rot === 90 || rot === 270, ar = (v.videoWidth && v.videoHeight) ? v.videoWidth / v.videoHeight : 16 / 9;
-  const w = st.clientWidth; let h = side ? w * ar : w / ar; h = Math.min(h, window.innerHeight - 180);
-  st.style.aspectRatio = "auto"; st.style.height = h + "px"; applyToBox(st, v, rot, fh, fv);
-}
-v.addEventListener("loadedmetadata", lay); window.addEventListener("resize", lay); lay();
-</script>
-{% endif %}
 
-<form method="get" class="line" style="margin-top:14px">
-  <label>Day</label>
-  <select name="date" onchange="this.form.submit()">{% for d in dates %}<option value="{{ d }}" {% if d == date %}selected{% endif %}>{{ d[0:4] }}-{{ d[4:6] }}-{{ d[6:8] }}</option>{% endfor %}</select>
-  <label>Jump to</label><input type="time" name="t" id="t" step="60"> <button class="small" type="button" id="go">Go</button>
-</form>
-<script>
-document.getElementById("go").addEventListener("click", () => {
-  const t = document.getElementById("t").value, d = document.querySelector("select[name=date]").value; if (!t || !d) return;
-  const at = Math.floor(new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}T${t}:00`).getTime() / 1000);
-  location.href = `/cam/{{ cam.id }}/recordings?date=${d}&at=${at}`;
-});
-</script>
-{% if not clips and not err %}<p class="muted">No recordings on this day.</p>{% endif %}
-<ul class="events big clips">
-{% for c in clips %}
-  <li><a href="/cam/{{ cam.id }}/recordings?date={{ date }}&at={{ c.start }}" class="{% if sel and sel.start >= c.start and sel.start < c.end %}on{% endif %}">
-    <b>{{ c.start_s }}</b> – {{ c.end_s }} <span class="muted">· {{ c.mins }} min{% if c.type == 2 %} · motion{% endif %}</span></a></li>
-{% endfor %}
-</ul>
-<p class="muted small">Footage comes straight from the card in the camera, so it takes a few seconds to start. Each view covers up to {{ max_clip // 60 }} minutes; use the arrows to move along. "Jump to" interprets the time in Toronto.</p>
+<div class="card tl">
+  <div class="tlHead"><b id="dayTitle"></b><span class="muted small" id="tlTime"></span></div>
+  <div class="track" id="track24" title="Drag to a time"><div class="segs"></div><div class="ticks"></div><div class="head"></div></div>
+  <div class="track hour" id="track1"><div class="segs"></div><div class="ticks"></div><div class="head"></div></div>
+  <div class="muted tiny">Top bar is the whole day; bottom bar is the hour around the playhead. Shaded = footage on the card{% if cam.device_type == 'SMART.TAPODOORBELL' %}, orange = motion{% endif %}.</div>
+</div>
+
+<div class="card cal">
+  <div class="calHead"><button class="secondary small" id="prevM">‹</button><b id="monthTitle"></b><button class="secondary small" id="nextM">›</button></div>
+  <div class="calGrid" id="calGrid"></div>
+  {% if sd %}<p class="muted tiny" style="margin:10px 0 0">Card: {{ sd.video_total_space if sd.total_space == '0B' else sd.total_space }}, {{ sd.free_space }} free{% if sd.loop_record_status == '1' %}, oldest footage is overwritten as it fills{% endif %}.</p>{% endif %}
+</div>
+
+</div>
+<script id="data" type="application/json">{{ data|safe }}</script>
+<script type="module" src="/static/recordings.js"></script>
 {% endblock %}

@@ -437,6 +437,20 @@ def _plock(cam_id):
     return _playback_locks.setdefault(cam_id, threading.Lock())
 
 
+def _day_bounds(date):
+    """Epoch seconds for local midnight at the start and end of YYYYMMDD."""
+    d = datetime.strptime(date, "%Y%m%d").replace(tzinfo=TZ)
+    return int(d.timestamp()), int((d + __import__("datetime").timedelta(days=1)).timestamp())
+
+
+def _month_dates(cam, ym):
+    """Days with footage in month YYYYMM (plus one day either side, for cross-midnight clips)."""
+    first = datetime.strptime(ym + "01", "%Y%m%d")
+    nxt = (first.replace(day=28) + __import__("datetime").timedelta(days=4)).replace(day=1)
+    return tapo.recording_dates(cloud, cam["device_id"], start=first.strftime("%Y%m%d"),
+                                end=(nxt - __import__("datetime").timedelta(days=1)).strftime("%Y%m%d"))
+
+
 @app.get("/cam/{cam_id}/recordings", response_class=HTMLResponse)
 async def recordings_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     me = require(request)
@@ -444,33 +458,40 @@ async def recordings_page(request: Request, cam_id: int, date: str = "", at: str
         raise HTTPException(404, "No such camera")
     cam = db.one("SELECT c.*, h.name AS house_name FROM cameras c LEFT JOIN houses h ON h.id=c.house_id WHERE c.id=?", cam_id)
     loop = asyncio.get_event_loop()
-    err = None; dates = []; clips = []; sd = None
+    err = None; clips = []; sd = None; dates = []
+    if not date:
+        date = datetime.now(TZ).strftime("%Y%m%d")
     try:
-        start = (datetime.now(TZ) - __import__("datetime").timedelta(days=60)).strftime("%Y%m%d")
-        dates, sd = await loop.run_in_executor(None, lambda: (tapo.recording_dates(cloud, cam["device_id"], start=start),
-                                                             tapo.sd_status(cloud, cam["device_id"])))
-        dates = sorted(dates, reverse=True)
-        if not date and dates:
-            date = dates[0]
-        if date:
-            clips = await loop.run_in_executor(None, tapo.recordings_of_day, cloud, cam["device_id"], date)
+        dates, sd = await loop.run_in_executor(None, lambda: (_month_dates(cam, date[:6]), tapo.sd_status(cloud, cam["device_id"])))
+        if date not in dates and dates and not at:
+            date = max(dates)
+        clips = await loop.run_in_executor(None, tapo.recordings_of_day, cloud, cam["device_id"], date)
     except Exception as e:
         err = str(e)[:200]
-    for c in clips:
-        c["start_s"] = datetime.fromtimestamp(c["start"], TZ).strftime("%-I:%M %p")
-        c["end_s"] = datetime.fromtimestamp(c["end"], TZ).strftime("%-I:%M %p")
-        c["mins"] = max(1, round((c["end"] - c["start"]) / 60))
-    sel = None
-    if at:
-        try:
-            t = int(at)
-            sel = next((c for c in clips if c["start"] <= t < c["end"]), None)
-            if sel:
-                sel = dict(sel, start=t, end=min(sel["end"], t + MAX_CLIP_SECONDS))
-        except ValueError:
-            pass
-    return render(request, "recordings.html", cam=cam, dates=dates, date=date, clips=clips, sel=sel, sd=sd, err=err, me=me,
-                  max_clip=MAX_CLIP_SECONDS)
+    day_start, day_end = _day_bounds(date)
+    at_t = int(at) if at.isdigit() else 0
+    return render(request, "recordings.html", cam=cam, date=date, dates=dates, clips=clips, sd=sd, err=err, me=me,
+                  max_clip=MAX_CLIP_SECONDS, day_start=day_start, day_end=day_end, at=at_t,
+                  data=json.dumps({"camId": cam_id, "date": date, "dates": dates, "clips": clips, "dayStart": day_start,
+                                   "dayEnd": day_end, "maxClip": MAX_CLIP_SECONDS, "at": at_t, "rotate": cam["rotate"],
+                                   "flipH": cam["flip_h"], "flipV": cam["flip_v"]}))
+
+
+@app.get("/cam/{cam_id}/recordings.json")
+async def recordings_json(request: Request, cam_id: int, date: str = "", month: str = ""):
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    loop = asyncio.get_event_loop()
+    try:
+        if month:
+            return {"dates": await loop.run_in_executor(None, _month_dates, cam, month)}
+        clips = await loop.run_in_executor(None, tapo.recordings_of_day, cloud, cam["device_id"], date)
+        ds, de = _day_bounds(date)
+        return {"date": date, "clips": clips, "dayStart": ds, "dayEnd": de}
+    except Exception as e:
+        raise HTTPException(503, str(e)[:200])
 
 
 @app.get("/stream/{cam_id}/clip.mp4")
