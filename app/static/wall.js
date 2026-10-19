@@ -156,3 +156,8 @@ function enableDrag(el) {
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
 }
 document.addEventListener("fullscreenchange", () => { drawWall(); setTimeout(() => { for (const t of tiles.values()) t.lay(); }, 50); });
+
+// in fullscreen, hover affordances only while the mouse is moving
+let idleT = null;
+document.addEventListener("mousemove", () => { if (!document.fullscreenElement) return; wall.classList.add("active"); clearTimeout(idleT); idleT = setTimeout(() => wall.classList.remove("active"), 2500); });
+document.addEventListener("fullscreenchange", () => { wall.classList.remove("active"); });
