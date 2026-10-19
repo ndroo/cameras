@@ -94,7 +94,7 @@
 <div class="wrap">
   <div class="top">
     <h1>🔥 Boiler Monitor</h1>
-    <a href="legend.html" class="sub">How to read the screens →</a>
+    <a href="/heating/legend.html" class="sub">How to read the screens →</a>
   </div>
   <div class="sub" id="sub">Loading…</div>
   <div class="banner" id="banner"></div>
@@ -105,12 +105,12 @@
   <div class="cards">
     <div class="cam">
       <h2>Boiler <span id="b-mode" class="pill off">—</span></h2>
-      <img id="b-img" alt="boiler" src="stills/boiler_latest.jpg">
+      <img id="b-img" alt="boiler" src="/heating/stills/boiler_latest.jpg">
       <div class="rows" id="b-rows"></div>
     </div>
     <div class="cam">
       <h2>Zone controller <span class="sub" style="font-weight:400">relay LEDs · ■ paired thermostat</span> <span id="z-pwr" class="pill off">—</span></h2>
-      <img id="z-img" alt="zone" src="stills/zone_latest.jpg">
+      <img id="z-img" alt="zone" src="/heating/stills/zone_latest.jpg">
       <div class="rows" id="z-rows"></div>
     </div>
   </div>
@@ -161,7 +161,7 @@
     </tr></thead><tbody id="tbody"></tbody></table></div>
   </div>
 
-  <div class="sub" style="text-align:center">Captured every 15 minutes by the camera server · screen read from pixels, model consulted as a check · auto-refreshes every 5 min · <a href="legend.html">screen legend</a></div>
+  <div class="sub" style="text-align:center">Captured every 15 minutes by the camera server · screen read from pixels, model consulted as a check · auto-refreshes every 5 min · <a href="/heating/legend.html">screen legend</a></div>
 </div>
 
 <script>
@@ -187,10 +187,10 @@ const COL_OUT = "#5e5ce6";
 let X2T = null;                       // px -> timestamp for the timeline hover (set by renderTimeline)
 async function loadWx(){
   try{
-    const r=await fetch("stills/weather.jsonl?t="+Date.now(), {cache:"no-store"});
+    const r=await fetch("/heating/stills/weather.jsonl?t="+Date.now(), {cache:"no-store"});
     WX = r.ok ? (await r.text()).trim().split("\n").filter(Boolean).map(l=>{try{const o=JSON.parse(l); return {ts:Date.parse(o.t), temp:o.temp_c, feels:o.apparent_c, rh:o.humidity, wind:o.wind_kmh, code:o.weather_code};}catch(e){return null;}}).filter(x=>x&&x.temp!=null) : [];
     WX.sort((a,b)=>a.ts-b.ts);
-    const l=await fetch("stills/weather_latest.json?t="+Date.now(), {cache:"no-store"});
+    const l=await fetch("/heating/stills/weather_latest.json?t="+Date.now(), {cache:"no-store"});
     WXL = l.ok ? await l.json() : null;
   }catch(e){ WX=[]; WXL=null; }
 }
@@ -240,7 +240,7 @@ function parseEco(o){ return { ts: Date.parse(o.timestamp||o.local)||0,
       sensors:(t.sensors||[]).map(x=>Object.assign({},x,{temp:F2C(x.temp)})), eq:t.equipment||[], mode:t.hvac_mode})) }; }
 async function loadEco(){
   try{
-    const r=await fetch("stills/ecobee.jsonl?t="+Date.now(), {cache:"no-store"});
+    const r=await fetch("/heating/stills/ecobee.jsonl?t="+Date.now(), {cache:"no-store"});
     if(!r.ok){ ECO=[]; return; }
     const text=await r.text();
     ECO=text.trim().split("\n").filter(Boolean).map(l=>{try{return parseEco(JSON.parse(l));}catch(e){return null;}}).filter(Boolean);
@@ -541,8 +541,8 @@ const pill = (v, onTxt, onCls, offTxt) => v===null ? '<span class="pill unk">n/a
 
 function renderLive(){
   const last=[...ALL].reverse().find(r=>r.hasB)||{}, lastZ=[...ALL].reverse().find(r=>r.hasZ)||{};
-  $("b-img").src="stills/boiler_latest.jpg?t="+Date.now();
-  $("z-img").src="stills/zone_latest.jpg?t="+Date.now();
+  $("b-img").src="/heating/stills/boiler_latest.jpg?t="+Date.now();
+  $("z-img").src="/heating/stills/zone_latest.jpg?t="+Date.now();
   const mode=last.mode||"—";
   $("b-mode").textContent=mode;
   $("b-mode").className="pill "+(mode==="heating"?"warn":mode==="dhw"?"dhw":mode==="idle"?"ok":"off");
@@ -700,7 +700,7 @@ function renderAlerts(list){
 
 async function loadAlerts(){
   try{
-    const r=await fetch("stills/alerts.jsonl?t="+Date.now(), {cache:"no-store"});
+    const r=await fetch("/heating/stills/alerts.jsonl?t="+Date.now(), {cache:"no-store"});
     if(!r.ok){ renderAlerts([]); return; }
     const text=await r.text();
     const list=text.trim().split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l);}catch(e){return null;}}).filter(Boolean);
@@ -711,7 +711,7 @@ async function loadAlerts(){
 async function load(){
   await Promise.all([loadEco(), loadWx()]);
   try{
-    const r=await fetch("stills/readings.jsonl?t="+Date.now(), {cache:"no-store"});
+    const r=await fetch("/heating/stills/readings.jsonl?t="+Date.now(), {cache:"no-store"});
     const text=await r.text();
     ALL=text.trim().split("\n").filter(Boolean).map(l=>{try{return parseLine(JSON.parse(l));}catch(e){return null;}}).filter(Boolean);
     ALL.sort((a,b)=>a.ts-b.ts);
