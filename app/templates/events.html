@@ -1,11 +1,11 @@
 {% extends "base.html" %}{% block title %}Events · Cameras{% endblock %}
 {% block body %}
 <h1>Events</h1>
-{% if not events %}<p class="muted">No events yet. Doorbell presses, tamper alerts and cameras going offline or back online show up here.</p>{% endif %}
+{% if not events %}<p class="muted">No events yet. Doorbell presses, tamper alerts, privacy mode and cameras going offline or back online show up here.</p>{% endif %}
 <ul class="events big">
 {% for e in events %}
   {% set what = e.detail.split(':', 2)[2] if e.detail and e.detail.startswith('det:') else '' %}
-  <li><span class="kind {{ e.kind }}">{{ e.kind }}</span> <a href="/cam/{{ e.camera_id }}{% if what %}?date={{ e.at|ymd }}&at={{ (e.at - 5)|int }}{% endif %}">{{ e.cam_name }}</a>{% if what %} <span>{{ what }}</span>{% endif %} <span class="muted">{{ e.house_name or '' }} · {{ e.at|dt }}</span></li>
+  <li><span class="kind {{ e.kind }}">{{ {'privacy_on': 'privacy on', 'privacy_off': 'privacy off'}.get(e.kind, e.kind) }}</span> <a href="/cam/{{ e.camera_id }}{% if what %}?date={{ e.at|ymd }}&at={{ (e.at - 5)|int }}{% endif %}">{{ e.cam_name }}</a>{% if what %} <span>{{ what }}</span>{% elif e.kind.startswith('privacy') %} <span>{{ e.detail }}</span>{% endif %} <span class="muted">{{ e.house_name or '' }} · {{ e.at|dt }}</span></li>
 {% endfor %}
 </ul>
 {% endblock %}

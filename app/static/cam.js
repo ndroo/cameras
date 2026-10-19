@@ -17,7 +17,7 @@ const today = () => ymd(new Date());
 let o = { rotate: D.rotate, flip_h: D.flipH, flip_v: D.flipV };
 if (!D.isAdmin) { try { const s = JSON.parse(localStorage.getItem("orient:" + D.camId)); if (s) o = s; } catch {} }
 const S = { mode: "live", date: D.date, dayStart: D.dayStart, dayEnd: D.dayEnd, clips: [], events: [], dates: new Set(), month: D.date.slice(0, 6),
-            t: now(), segStart: 0, segEnd: 0, playing: false, loaded: false };
+            t: now(), segStart: 0, segEnd: 0, playing: false, loaded: false, priv: D.privacy, privacy: [] };
 
 // ---------------------------------------------------------------- player
 const wrap = $("#camWrap");
@@ -44,11 +44,39 @@ function hideHint() { hint.style.display = "none"; }
 function goLive() {
   S.mode = "live"; S.playing = false;
   clip.pause(); clip.removeAttribute("src"); clip.load(); clip.hidden = true;
+  if (S.priv) return showPrivacy();
   live.style.display = ""; live.src = `/stream/${D.camId}/ws`;
   modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.hidden = true; speed.hidden = true;
   poster.style.opacity = ".6"; showHint("Connecting to camera…"); status.textContent = "";
   S.t = now(); keepInView(S.t); history.replaceState(null, "", `/cam/${D.camId}`); layout(); draw(); showPtz();
 }
+// ---------------------------------------------------------------- privacy mode
+const privOverlay = $("#privOverlay");
+function showPrivacy() {
+  live.src = ""; live.style.display = "none"; hideHint(); poster.style.opacity = "0"; privOverlay.hidden = false;
+  $("#privTxt").textContent = `Until ${fmtT(S.priv.until)} · turned on by ${S.priv.by}`;
+  $("#privResume").hidden = !S.priv.canResume;
+  modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.hidden = true; speed.hidden = true; status.textContent = "";
+  S.t = now(); keepInView(S.t); history.replaceState(null, "", `/cam/${D.camId}`); layout(); draw(); showPtz();
+}
+async function privacyPost(fd) {
+  const r = await fetch(`/cam/${D.camId}/privacy`, { method: "POST", body: fd });
+  if (!r.ok) { let m = "Something went wrong."; try { const j = await r.json(); m = j.error || j.detail || m; } catch {} throw new Error(m); }
+  location.replace(`/cam/${D.camId}`);
+}
+if (S.priv) setTimeout(() => location.replace(`/cam/${D.camId}`), Math.max(1, S.priv.until - now() + 3) * 1000);   // comes back on by itself
+$("#privResume").addEventListener("click", ev => { ev.target.disabled = true; const fd = new FormData(); fd.set("resume", "1");
+  privacyPost(fd).catch(e => { ev.target.disabled = false; $("#privTxt").textContent = e.message; }); });
+if (D.canPause) {
+  const btn = $("#privBtn"), modal = $("#privModal"), err = $("#privErr");
+  btn.hidden = false; if (S.priv) btn.classList.add("active");
+  btn.addEventListener("click", () => { err.hidden = true; $("#privGo").textContent = S.priv ? "Change privacy time" : "Turn on privacy"; modal.hidden = false; });
+  $("#privClose").addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", ev => { if (ev.target === modal) modal.hidden = true; });
+  $("#privGo").addEventListener("click", ev => { ev.target.disabled = true; const fd = new FormData(); fd.set("hours", $("#privHours").value);
+    privacyPost(fd).catch(e => { ev.target.disabled = false; err.textContent = e.message; err.hidden = false; }); });
+}
+
 const covered = t => S.clips.find(c => c.start <= t && t < c.end);
 function snap(t) {
   // nearest moment that has footage; "now" counts as footage on today's bar
@@ -67,7 +95,7 @@ function play(t) {
   if (n === null) { status.textContent = "No footage after that time on this day."; S.t = t; draw(); return; }
   const c = covered(n); t = n;
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
-  live.src = ""; live.style.display = "none"; clip.hidden = false; showPtz();
+  live.src = ""; live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz();
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}`;
   clip.src = url; clip.playbackRate = +speed.value; clip.play().catch(() => {});
   speed.hidden = false;
@@ -123,7 +151,7 @@ async function ptzMove(dir, btn) {
   catch { ptz.classList.add("err"); setTimeout(() => ptz.classList.remove("err"), 1500); }
   finally { ptzBusy = false; btn.classList.remove("busy"); }
 }
-function showPtz() { ptz.hidden = !(D.ptz && S.mode === "live"); }
+function showPtz() { ptz.hidden = !(D.ptz && S.mode === "live" && !S.priv); }
 if (D.ptz) {
   stage.classList.add("hasPtz");
   const stop = () => { if (ptzHold) { clearInterval(ptzHold); ptzHold = null; } };
@@ -168,6 +196,8 @@ function draw() {
   const segs = track.querySelector(".segs"); segs.innerHTML = "";
   for (const c of S.clips) { const s = Math.max(a, c.start), e = Math.min(b, c.end); if (e <= s) continue;
     const d = document.createElement("div"); d.className = "seg"; d.style.left = X(s); d.style.width = ((e - s) / span * 100) + "%"; segs.appendChild(d); }
+  for (const [ps, pe0] of S.privacy) { const pe = S.priv && pe0 >= nowT - 120 ? Math.max(pe0, nowT) : pe0, s = Math.max(a, ps), e = Math.min(b, pe); if (e <= s) continue;
+    const d = document.createElement("div"); d.className = "seg priv"; d.title = `privacy mode ${fmtT(ps)} – ${fmtT(pe)}`; d.style.left = X(s); d.style.width = ((e - s) / span * 100) + "%"; segs.appendChild(d); }
   const marks = track.querySelector(".marks"); marks.innerHTML = "";
   for (const e of S.events) { if (e.start < a || e.start > b) continue;
     const m = document.createElement("div"); m.className = "mark"; const [col, name] = kindOf(e);
@@ -192,7 +222,7 @@ function draw() {
   $("#dayTitle").textContent = fmtD(S.date); $("#daySub").textContent = S.date === today() ? "today" : "";
   $("#dayNext").disabled = S.date >= today();
   const kinds = new Map(); for (const e of S.events) { const [c, n] = kindOf(e); kinds.set(n, c); }
-  $("#legend").innerHTML = `<span><i style="background:rgba(79,140,255,.45)"></i>footage</span>` + [...kinds].map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("") + (S.loaded && !S.clips.length ? `<span class="muted">no footage on this day</span>` : "");
+  $("#legend").innerHTML = `<span><i style="background:rgba(79,140,255,.45)"></i>footage</span>` + [...kinds].map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("") + (S.privacy.length ? `<span><i class="privSw"></i>privacy mode (hidden)</span>` : "") + (S.loaded && !S.clips.length ? `<span class="muted">no footage on this day</span>` : "");
 }
 let drag = null; const ptrs = new Map(); let pinch = null;
 const tAt = x => { const r = track.getBoundingClientRect(); const [a, b] = vis(); const f = Math.min(1, Math.max(0, (x - r.left) / r.width)); return Math.round(a + f * (b - a)); };
@@ -232,6 +262,7 @@ function drawCut() {
     const h = Math.floor(len / 3600), m = Math.round((len % 3600) / 60), dur = (h ? `${h} h ` : "") + `${m} min`;
     const mb = len * BYTES_PER_SEC / 1e6, size = mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${Math.round(mb)} MB`;
     if (len > D.maxDownload) { go.hidden = true; note.textContent = `${dur} selected. The limit is ${Math.round(D.maxDownload / 3600)} hours per file; shorten the selection.`; }
+    else if (S.privacy.some(([ps, pe]) => ps < hi && pe > lo)) { go.hidden = true; note.textContent = "That selection includes privacy-mode time, which can't be downloaded. Pick a stretch that doesn't cross the black band."; }
     else { go.textContent = `Download selection · ${dur} · ~${size}`; go.href = `/stream/${D.camId}/clip.mp4?start=${lo}&end=${hi}&download=1`; }
   }
   draw();
@@ -271,7 +302,7 @@ async function loadDay(key, at, attempt = 0) {
       if (/busy|71103/.test(msg) && attempt < 4) { await new Promise(res => setTimeout(res, 4000)); return loadDay(key, at, attempt + 1); }
       throw new Error(msg); }
     const j = await r.json();
-    S.date = key; S.clips = j.clips; S.events = j.events || []; S.dayStart = j.dayStart; S.dayEnd = j.dayEnd; S.loaded = true; view = null; $("#zoomReset").hidden = true;
+    S.date = key; S.clips = j.clips; S.events = j.events || []; S.privacy = j.privacy || []; S.dayStart = j.dayStart; S.dayEnd = j.dayEnd; S.loaded = true; view = null; $("#zoomReset").hidden = true;
     if (j.sd) { sdLoaded = true; const sd = j.sd; const size = sd.total_space === "0B" ? sd.video_total_space : sd.total_space;
       $("#cardInfo").textContent = `Card: ${size}, ${sd.free_space} free${sd.loop_record_status === "1" ? ", oldest footage is overwritten as it fills" : ""}. Footage comes straight from the card, so playback takes a few seconds to start.`; }
     setBusy(false);

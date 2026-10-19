@@ -34,6 +34,9 @@ CREATE INDEX IF NOT EXISTS events_cam_at ON events(camera_id, at);
 CREATE TABLE IF NOT EXISTS sms_log (id INTEGER PRIMARY KEY, person_id INTEGER, phone TEXT, kind TEXT, body TEXT,
   at REAL, sid TEXT, error TEXT);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS privacy (id INTEGER PRIMARY KEY, camera_id INTEGER REFERENCES cameras(id) ON DELETE CASCADE,
+  start REAL NOT NULL, until REAL NOT NULL, by_person INTEGER, ended_at REAL, ended_by INTEGER);
+CREATE INDEX IF NOT EXISTS privacy_cam ON privacy(camera_id, start);
 CREATE TABLE IF NOT EXISTS login_fails (ident TEXT PRIMARY KEY, count INTEGER DEFAULT 0, until REAL);
 """
 
@@ -131,3 +134,23 @@ def recipients_for(camera_id, kind):
                  JOIN cameras c ON c.id=? AND c.house_id=g.house_id
                  LEFT JOIN group_cameras gc ON gc.group_id=g.id AND gc.camera_id=c.id
                  WHERE g.all_cameras=1 OR gc.camera_id IS NOT NULL""", camera_id)
+
+
+# ------------------------------------------------------------------ privacy mode
+def privacy_active(camera_id):
+    """The privacy window covering this camera right now, with who started it, or None."""
+    return one("""SELECT pr.*, p.name AS by_name FROM privacy pr LEFT JOIN people p ON p.id=pr.by_person
+                  WHERE pr.camera_id=? AND pr.ended_at IS NULL AND pr.start<=? AND pr.until>?""",
+               camera_id, time.time(), time.time())
+
+
+def privacy_windows(camera_id, a, b):
+    """[(start, end)] of privacy windows overlapping a..b. A window ends when it runs out
+    or when someone resumes the camera, whichever came first."""
+    rows = q("SELECT start, MIN(until, COALESCE(ended_at, until)) AS e FROM privacy WHERE camera_id=? AND start<? "
+             "AND MIN(until, COALESCE(ended_at, until))>? ORDER BY start", camera_id, b, a)
+    return [(r["start"], r["e"]) for r in rows]
+
+
+def in_privacy(windows, t):
+    return any(s <= t < e for s, e in windows)

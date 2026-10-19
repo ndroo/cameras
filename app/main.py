@@ -77,6 +77,7 @@ STATIC_V = str(int(time.time()))          # changes on every start, so browsers 
 tpl.env.globals["v"] = STATIC_V
 tpl.env.filters["ago"] = fmt_ago
 tpl.env.filters["dt"] = fmt_dt
+tpl.env.filters["hm"] = lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%-I:%M %p").lower()
 tpl.env.filters["ymd"] = lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%Y%m%d")
 
 
@@ -304,7 +305,8 @@ def home(request: Request):
         if not houses or houses[-1]["name"] != (c["house_name"] or "Unassigned"):
             houses.append({"name": c["house_name"] or "Unassigned", "cams": []})
         houses[-1]["cams"].append(c)
-    return render(request, "home.html", houses=houses, me=me)
+    private = {r["camera_id"]: r["until"] for r in db.q("SELECT camera_id, until FROM privacy WHERE ended_at IS NULL AND until>?", time.time())}
+    return render(request, "home.html", houses=houses, me=me, private=private)
 
 
 @app.get("/cam/{cam_id}", response_class=HTMLResponse)
@@ -319,7 +321,8 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     sd = None            # card status is fetched by the page after it renders (see recordings.json)
     data = {"camId": cam_id, "name": cam["name"], "date": date, "dayStart": day_start, "dayEnd": day_end, "at": int(at) if at.isdigit() else 0,
             "maxClip": MAX_CLIP_SECONDS, "maxDownload": MAX_DOWNLOAD_SECONDS, "rotate": cam["rotate"], "flipH": cam["flip_h"], "flipV": cam["flip_v"],
-            "isAdmin": bool(me["is_admin"]), "tz": str(TZ), "ptz": bool(cam["ptz"]) and bool(me["is_admin"])}
+            "isAdmin": bool(me["is_admin"]), "tz": str(TZ), "ptz": bool(cam["ptz"]) and bool(me["is_admin"]),
+            "canPause": bool(me["is_admin"]), "privacy": _privacy_info(cam_id, me)}
     return render(request, "cam.html", cam=cam, sd=sd, me=me, data=json.dumps(data))
 
 
@@ -327,7 +330,7 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
 def wall(request: Request):
     me = require(request)
     cams = [{"id": c["id"], "name": c["name"], "house": c["house_name"], "online": c["online"], "rotate": c["rotate"], "flipH": c["flip_h"],
-             "flipV": c["flip_v"], "thumbAt": int(c["thumb_at"] or 0)} for c in db.person_cameras(me)]
+             "flipV": c["flip_v"], "thumbAt": int(c["thumb_at"] or 0), "private": bool(db.privacy_active(c["id"]))} for c in db.person_cameras(me)]
     return render(request, "wall.html", me=me, data=json.dumps(cams))
 
 
@@ -378,6 +381,81 @@ async def cam_ptz(request: Request, cam_id: int, x: int = Form(0), y: int = Form
     return JSONResponse({"ok": True})
 
 
+# ------------------------------------------------------------------ privacy mode
+PRIVACY_MAX_HOURS = 24
+_live_ws = {}          # cam_id -> set of open live websockets, closed when privacy starts
+
+
+def _fmt_hours(h):
+    return f"{h:g} hour" + ("" if h == 1 else "s")
+
+
+@app.post("/cam/{cam_id}/privacy")
+async def cam_privacy(request: Request, cam_id: int, hours: float = Form(0), resume: str = Form("")):
+    """Pause a camera for 1-24 hours, or resume it early. Admins only. The camera keeps
+    recording to its card; the site hides live view and that stretch of footage from everyone."""
+    me = require(request, admin=True)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404, "No such camera")
+    cur = db.privacy_active(cam_id)
+    if resume:
+        if not cur:
+            return JSONResponse({"ok": True})
+        db.run("UPDATE privacy SET ended_at=?, ended_by=? WHERE id=?", time.time(), me["id"], cur["id"])
+        record_event(cam, "privacy_off", f"Resumed early by {me['name']}")
+        return JSONResponse({"ok": True})
+    if not 1 <= hours <= PRIVACY_MAX_HOURS:
+        return JSONResponse({"ok": False, "error": f"Pick between 1 and {PRIVACY_MAX_HOURS} hours."}, status_code=400)
+    now = time.time()
+    if cur:                             # already paused: extend or shorten from now
+        db.run("UPDATE privacy SET ended_at=?, ended_by=? WHERE id=?", now, me["id"], cur["id"])
+    db.run("INSERT INTO privacy(camera_id,start,until,by_person) VALUES(?,?,?,?)", cam_id, now, now + hours * 3600, me["id"])
+    until = datetime.fromtimestamp(now + hours * 3600, TZ).strftime("%-I:%M %p").lower()
+    record_event(cam, "privacy_on", f"{me['name']} turned on privacy for {_fmt_hours(hours)} (until {until})")
+    for ws in list(_live_ws.get(cam_id, ())):
+        try: await ws.close(code=4423)
+        except Exception: pass
+    return JSONResponse({"ok": True})
+
+
+def _privacy_info(cam_id, me):
+    cur = db.privacy_active(cam_id)
+    if not cur:
+        return None
+    return {"until": int(cur["until"]), "by": cur["by_name"] or "someone",
+            "canResume": bool(me["is_admin"])}
+
+
+def privacy_expire_once():
+    """Windows that ran out: close them and log the automatic resume."""
+    for pr in db.q("SELECT * FROM privacy WHERE ended_at IS NULL AND until<=?", time.time()):
+        db.run("UPDATE privacy SET ended_at=until WHERE id=?", pr["id"])
+        cam = db.one("SELECT * FROM cameras WHERE id=?", pr["camera_id"])
+        if cam:
+            record_event(cam, "privacy_off", "Resumed automatically", at=pr["until"])
+
+
+def privacy_loop():
+    while True:
+        try:
+            privacy_expire_once()
+        except Exception as e:
+            log.warning("privacy expiry: %s", e)
+        time.sleep(30)
+
+
+def _minus_windows(clips, wins):
+    """Cut privacy windows out of the card's clip list."""
+    out = []
+    for c in clips:
+        pieces = [(c["start"], c["end"])]
+        for ws_, we in wins:
+            pieces = [p for s, e in pieces for p in ((s, min(e, ws_)), (max(s, we), e)) if p[1] > p[0]]
+        out += [{**c, "start": int(s), "end": int(e)} for s, e in pieces]
+    return out
+
+
 # ------------------------------------------------------------------ streams
 def _stream_name(cam):
     return f"cam{cam['id']}"
@@ -422,8 +500,11 @@ async def stream_ws(ws: WebSocket, cam_id: int):
     s = db.one("SELECT p.* FROM sessions s JOIN people p ON p.id=s.person_id WHERE s.token=?", tok) if tok else None
     if not s or not db.can_view(s, cam_id):
         await ws.close(code=4403); return
+    if db.privacy_active(cam_id):
+        await ws.close(code=4423); return
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
     await ws.accept()
+    _live_ws.setdefault(cam_id, set()).add(ws)
     url = GO2RTC.replace("http", "ws", 1) + f"/api/ws?src={_stream_name(cam)}"
     try:
         async with websockets.connect(url, max_size=None) as up:
@@ -452,6 +533,7 @@ async def stream_ws(ws: WebSocket, cam_id: int):
     except Exception as e:
         log.info("ws bridge cam%s: %s", cam_id, e)
     finally:
+        _live_ws.get(cam_id, set()).discard(ws)
         try: await ws.close()
         except Exception: pass
 
@@ -462,6 +544,8 @@ def thumb(request: Request, cam_id: int):
     if not db.can_view(me, cam_id):
         raise HTTPException(404)
     p = os.path.join(DATA_DIR, "thumbs", f"{cam_id}.jpg")
+    if db.privacy_active(cam_id):
+        return FileResponse(os.path.join(HERE, "static", "privacy.svg"), media_type="image/svg+xml", headers={"Cache-Control": "no-cache"})
     if not os.path.exists(p):
         return FileResponse(os.path.join(HERE, "static", "nothumb.svg"), media_type="image/svg+xml")
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
@@ -472,6 +556,8 @@ async def frame(request: Request, cam_id: int):
     me = require(request)
     if not db.can_view(me, cam_id):
         raise HTTPException(404)
+    if db.privacy_active(cam_id):
+        raise HTTPException(423, "Privacy mode is on")
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
     async with httpx.AsyncClient(timeout=40) as c:
         r = await c.get(f"{GO2RTC}/api/frame.jpeg", params={"src": _stream_name(cam)})
@@ -560,7 +646,11 @@ async def recordings_json(request: Request, cam_id: int, date: str = "", month: 
             events = await loop.run_in_executor(None, tapo.detections_of_day, cloud, cam["device_id"], ds, de)
         except Exception as e:
             log.info("detections cam%s: %s", cam_id, e); events = []
-        out = {"date": date, "clips": clips, "events": events, "dayStart": ds, "dayEnd": de}
+        wins = db.privacy_windows(cam_id, ds, de)
+        clips = _minus_windows(clips, wins)
+        events = [e for e in events if not db.in_privacy(wins, e["start"])]
+        out = {"date": date, "clips": clips, "events": events, "dayStart": ds, "dayEnd": de,
+               "privacy": [[int(a), int(min(b, time.time()))] for a, b in wins]}
         if request.query_params.get("sd"):
             try:
                 out["sd"] = await loop.run_in_executor(None, tapo.sd_status, cloud, cam["device_id"])
@@ -581,6 +671,10 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     if end <= start:
         raise HTTPException(400, "end must be after start")
     end = min(end, start + (MAX_DOWNLOAD_SECONDS if download else MAX_CLIP_SECONDS))
+    for ws_, we in db.privacy_windows(cam_id, start, end):     # privacy footage never leaves the server
+        if ws_ <= start:
+            raise HTTPException(403, "That time was in privacy mode.")
+        end = min(end, int(ws_))
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
     lock = _plock(cam_id)
     if not lock.acquire(blocking=False):
@@ -674,6 +768,8 @@ def _queue_alert(person, cam, kind):
 
 
 def record_event(cam, kind, detail="", at=None):
+    if kind == "motion" and db.privacy_active(cam["id"]):
+        return None
     eid = db.run("INSERT INTO events(camera_id,kind,at,detail) VALUES(?,?,?,?)", cam["id"], kind, at or time.time(), detail[:500])
     house = db.one("SELECT name FROM houses WHERE id=?", cam["house_id"]) if cam["house_id"] else None
     where = f"{cam['name']}" + (f" at {house['name']}" if house else "")
@@ -735,8 +831,11 @@ def sync_detections(cam, lookback=600, notify=True):
     never reaches us. Returns the number of new events."""
     now = time.time()
     dets = tapo.detections_of_day(cloud, cam["device_id"], int(now - lookback), int(now) + 60)
+    wins = db.privacy_windows(cam["id"], now - lookback, now + 60)
     n = 0
     for d in dets:
+        if db.in_privacy(wins, d["start"]):
+            continue
         tag = f"det:{d['start']}:"
         if db.one("SELECT 1 FROM events WHERE camera_id=? AND detail LIKE ?", cam["id"], tag + "%"):
             continue
@@ -793,7 +892,8 @@ def _snapshot_from_relay(device_id):
 def check_camera(cam):
     try:
         jpeg = _snapshot_from_relay(cam["device_id"])
-        _save_thumb(cam["id"], jpeg)
+        if not db.privacy_active(cam["id"]):
+            _save_thumb(cam["id"], jpeg)
         was = cam["online"]
         db.run("UPDATE cameras SET online=1, last_check=?, last_error=NULL, fail_count=0, "
                "online_since=COALESCE(CASE WHEN online=1 THEN online_since END, ?) WHERE id=?", time.time(), time.time(), cam["id"])
@@ -1228,6 +1328,7 @@ async def startup():
         log.warning("TPLINK_EMAIL not set: streams and health checks disabled")
     threading.Thread(target=watch_loop, name="watchdog", daemon=True).start()
     threading.Thread(target=backup_loop, name="backup", daemon=True).start()
+    threading.Thread(target=privacy_loop, name="privacy", daemon=True).start()
     asyncio.create_task(_register_later())
 
 

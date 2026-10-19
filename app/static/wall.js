@@ -79,7 +79,8 @@ function drawWall() {
       v.addEventListener("waiting", () => { hint.style.display = ""; hint.innerHTML = '<i class="spin"></i>Reconnecting…'; }); }
     // belt and braces: some modes never fire "playing" on the inner element
     const poll = setInterval(() => { const vv = vs.video; if (vv && vv.readyState >= 3 && !vv.paused && vv.currentTime > 0) { shown(); } if (!tiles.has(c.id)) clearInterval(poll); }, 500);
-    vs.src = `/stream/${c.id}/ws`;
+    if (c.private) { hint.textContent = "🔒 Privacy mode"; poster.style.opacity = "1"; }
+    else vs.src = `/stream/${c.id}/ws`;
     tiles.set(c.id, { el, vs, lay }); lay(); enableDrag(el);
     new ResizeObserver(lay).observe(stage);
   }
