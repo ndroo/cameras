@@ -2,8 +2,10 @@ import { applyToBox } from "/static/orient.js";
 const CAMS = JSON.parse(document.getElementById("data").textContent);
 const $ = s => document.querySelector(s);
 const wall = $("#wall"), colsSel = $("#cols");
-let sel = new Set(CAMS.slice(0, 6).map(c => c.id)), cols = 0;
-try { const s = JSON.parse(localStorage.getItem("wall:sel")); if (Array.isArray(s)) sel = new Set(s.filter(id => CAMS.some(c => c.id === id))); cols = +localStorage.getItem("wall:cols") || 0; } catch {}
+let sel = new Set(CAMS.slice(0, 6).map(c => c.id)), cols = 0, order = CAMS.map(c => c.id);
+try { const s = JSON.parse(localStorage.getItem("wall:sel")); if (Array.isArray(s)) sel = new Set(s.filter(id => CAMS.some(c => c.id === id))); cols = +localStorage.getItem("wall:cols") || 0;
+  const o = JSON.parse(localStorage.getItem("wall:order")); if (Array.isArray(o)) order = [...o.filter(id => CAMS.some(c => c.id === id)), ...order.filter(id => !o.includes(id))]; } catch {}
+const byOrder = (a, b) => order.indexOf(a.id) - order.indexOf(b.id);
 colsSel.value = String(cols);
 
 const drawer = $("#drawer"), back = $("#drawerBack"), list = $("#pickList"), search = $("#pickSearch");
@@ -38,23 +40,32 @@ back.addEventListener("click", () => openDrawer(false));
 $("#pickNone").addEventListener("click", () => { sel.clear(); apply(); });
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") openDrawer(false); });
 search.value = "";
-function save() { try { localStorage.setItem("wall:sel", JSON.stringify([...sel])); localStorage.setItem("wall:cols", String(cols)); } catch {} }
+function save() { try { localStorage.setItem("wall:sel", JSON.stringify([...sel])); localStorage.setItem("wall:cols", String(cols)); localStorage.setItem("wall:order", JSON.stringify(order)); } catch {} }
+function bestCols(n, W, H) {
+  // the column count that wastes the least screen for n 16:9 tiles
+  let best = 1, bestArea = 0;
+  for (let c = 1; c <= Math.min(n, 8); c++) { const r = Math.ceil(n / c); const tw = Math.min(W / c, (H / r) * 16 / 9); const area = tw * tw * 9 / 16 * n; if (area > bestArea) { bestArea = area; best = c; } }
+  return best;
+}
 const tiles = new Map();
 function drawWall() {
-  const chosen = CAMS.filter(c => sel.has(c.id));
+  const chosen = CAMS.filter(c => sel.has(c.id)).sort(byOrder);
   $("#wallEmpty").hidden = chosen.length > 0;
-  const n = chosen.length, w = wall.clientWidth || innerWidth;
-  const auto = w < 640 ? (n > 1 ? 2 : 1) : n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  const n = chosen.length, w = wall.clientWidth || innerWidth, fs = !!document.fullscreenElement;
+  const auto = fs ? bestCols(n, innerWidth, innerHeight) : w < 640 ? (n > 1 ? 2 : 1) : n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
   wall.style.gridTemplateColumns = `repeat(${cols || auto}, minmax(0, 1fr))`;
   for (const [id, t] of tiles) if (!sel.has(id)) { t.vs.src = ""; t.el.remove(); tiles.delete(id); }
+  // keep DOM order in sync with the saved order
+  for (const c of chosen) { const t = tiles.get(c.id); if (t && t.el.parentNode === wall) wall.appendChild(t.el); }
   for (const c of chosen) {
     if (tiles.has(c.id)) continue;
     const el = document.createElement("a"); el.className = "wallTile"; el.href = `/cam/${c.id}`;
+    el.dataset.id = c.id;
     el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner">Connecting…</div>
-      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}</span></div></div>`;
+      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}</span><i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
+    const sideways = c.rotate === 90 || c.rotate === 270; if (sideways) el.classList.add("sideways");
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
-    stage.prepend(vs);
-    wall.appendChild(el);
+    stage.prepend(vs); wall.appendChild(el);
     const poster = stage.querySelector(".poster"), hint = stage.querySelector(".spinner");
     const lay = () => { for (const x of [vs, poster]) applyToBox(stage, x, c.rotate, c.flipH, c.flipV); };
     const shown = () => { poster.style.opacity = "0"; hint.style.display = "none"; };
@@ -73,3 +84,29 @@ colsSel.addEventListener("change", () => { cols = +colsSel.value; save(); drawWa
 $("#fullBtn").addEventListener("click", () => { (wall.requestFullscreen || wall.webkitRequestFullscreen).call(wall); });
 window.addEventListener("resize", () => { if (!cols) drawWall(); });
 drawPick(); drawWall();
+
+// ---------------------------------------------------------------- drag to rearrange (mouse and touch)
+function enableDrag(el) {
+  let start = null, ghost = null, dragging = false;
+  el.addEventListener("click", ev => { if (el.dataset.dragged) { ev.preventDefault(); delete el.dataset.dragged; } });
+  el.addEventListener("pointerdown", ev => {
+    if (ev.button !== 0) return;
+    const onGrip = !!ev.target.closest(".grip");
+    if (ev.pointerType !== "mouse" && !onGrip) return;           // on touch only the grip starts a drag, so the page can still scroll
+    start = { x: ev.clientX, y: ev.clientY, id: ev.pointerId }; el.setPointerCapture(ev.pointerId); if (onGrip) ev.preventDefault();
+  });
+  el.addEventListener("pointermove", ev => {
+    if (!start || ev.pointerId !== start.id) return;
+    if (!dragging) { if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) return; dragging = true; el.dataset.dragged = "1";
+      ghost = el.cloneNode(true); ghost.className = "wallTile ghost"; ghost.querySelectorAll("video-stream").forEach(x => x.remove());
+      const r = el.getBoundingClientRect(); ghost.style.width = r.width + "px"; ghost.style.height = r.height + "px"; document.body.appendChild(ghost); el.classList.add("dragSrc"); }
+    ghost.style.transform = `translate(${ev.clientX - ghost.offsetWidth / 2}px, ${ev.clientY - ghost.offsetHeight / 2}px)`;
+    const over = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("wallTile") && x !== el && x !== ghost);
+    if (over) { const r = over.getBoundingClientRect(); const before = (ev.clientX - r.left) / r.width < 0.5; wall.insertBefore(el, before ? over : over.nextSibling); for (const t of tiles.values()) t.lay(); }
+  });
+  const end = ev => { if (!start || ev.pointerId !== start.id) return; start = null;
+    if (dragging) { dragging = false; ghost.remove(); ghost = null; el.classList.remove("dragSrc");
+      const ids = [...wall.querySelectorAll(".wallTile")].map(x => +x.dataset.id); order = [...ids, ...order.filter(id => !ids.includes(id))]; save(); } };
+  el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+}
+document.addEventListener("fullscreenchange", () => { drawWall(); setTimeout(() => { for (const t of tiles.values()) t.lay(); }, 50); });
