@@ -7,6 +7,16 @@
  · <form method="post" action="/admin/test-sms" class="inline"><button class="link" data-busy="sending…">send me a test text</button></form></p>
 
 <section class="card">
+  <h2>System</h2>
+  <p class="small">Heating monitor: {% if heating.last %}last cycle {{ heating.last|ago }} ({{ 'ok' if heating.ok else 'had errors' }}){% else %}not run yet{% endif %}
+    <form method="post" action="/admin/heating/run" class="inline"><button class="link" data-busy="starting…">run a cycle now</button></form>
+    · <a href="/heating">dashboard</a></p>
+  <p class="small">Watchdog: {% for w in watch %}<span class="dot {{ 'ok' if w.ok else 'bad' }}"></span>{{ w.url }} ({{ w.at|ago }}) {% endfor %}{% if not watch %}no checks yet{% endif %}</p>
+  <p class="small">Backup: {% if backup %}last {{ backup.at|ago }}, database {{ (backup.db / 1024) | int }} KB{% if backup.bucket %}, uploaded to the bucket{% else %}, local only (no bucket configured){% endif %}{% else %}none yet{% endif %}
+    <form method="post" action="/admin/backup" class="inline"><button class="link" data-busy="running…">back up now</button></form></p>
+</section>
+
+<section class="card">
   <h2>Houses</h2>
   {% for h in houses %}
   <form method="post" action="/admin/house" class="line">

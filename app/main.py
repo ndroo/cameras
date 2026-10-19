@@ -830,6 +830,104 @@ def admin_heating_run(request: Request):
     return RedirectResponse("/admin?msg=Heating+cycle+started", status_code=303)
 
 
+# ------------------------------------------------------------------ watchdog for the other sites
+WATCH_URLS = [u.strip() for u in os.environ.get("WATCH_URLS", "https://180beatrice.andrewmcgrath.info/,https://andrewmcgrath.info/").split(",") if u.strip()]
+WATCH_EVERY = int(os.environ.get("WATCH_EVERY", "300"))
+_watch = {}   # url -> {"fails": n, "down": bool}
+
+
+def _admins():
+    return db.q("SELECT * FROM people WHERE is_admin=1")
+
+
+def watch_once():
+    import requests as rq
+    for url in WATCH_URLS:
+        st = _watch.setdefault(url, {"fails": 0, "down": False})
+        try:
+            r = rq.get(url, timeout=20, headers={"User-Agent": "cameras-watchdog"})
+            ok = r.status_code < 500
+            err = "" if ok else f"HTTP {r.status_code}"
+        except Exception as e:
+            ok, err = False, str(e)[:120]
+        if ok:
+            if st["down"]:
+                st["down"] = False
+                for p in _admins():
+                    sms.send(p["phone"], f"Site back up: {url}", kind="watchdog", person_id=p["id"])
+            st["fails"] = 0
+        else:
+            st["fails"] += 1
+            if st["fails"] >= 2 and not st["down"]:
+                st["down"] = True
+                log.warning("watchdog: %s down (%s)", url, err)
+                for p in _admins():
+                    sms.send(p["phone"], f"Site down: {url} ({err}). Checked twice over {WATCH_EVERY * 2 // 60} min.", kind="watchdog", person_id=p["id"])
+        db.kv_set(f"watch:{url}", json.dumps({"ok": ok, "err": err, "at": time.time(), "down": st["down"]}))
+
+
+def watch_loop():
+    time.sleep(120)
+    while True:
+        try:
+            watch_once()
+        except Exception as e:
+            log.warning("watchdog: %s", e)
+        time.sleep(WATCH_EVERY)
+
+
+# ------------------------------------------------------------------ nightly backup
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+
+
+def backup_once():
+    """Consistent SQLite copy + the heating logs and state, kept locally for 14 days and
+    pushed to the bucket when one is configured (Fly Tigris: BUCKET_NAME + AWS_* secrets)."""
+    import sqlite3, tarfile, glob as _glob
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = datetime.now(TZ).strftime("%Y%m%d")
+    dbp = os.path.join(BACKUP_DIR, f"cameras-{stamp}.db")
+    src = sqlite3.connect(db.DB_PATH); dst = sqlite3.connect(dbp)
+    with dst: src.backup(dst)
+    src.close(); dst.close()
+    tarp = os.path.join(BACKUP_DIR, f"heating-{stamp}.tar.gz")
+    with tarfile.open(tarp, "w:gz") as tf:
+        for f in _glob.glob(os.path.join(HEATING_OUT, "*.json")) + _glob.glob(os.path.join(HEATING_OUT, "*.jsonl")) + \
+                 _glob.glob(os.path.join(HEATING_OUT, "*_latest.jpg")) + [os.path.join(DATA_DIR, "heating", "ecobee_token.enc")]:
+            if os.path.exists(f):
+                tf.add(f, arcname=os.path.basename(f))
+    for f in sorted(_glob.glob(os.path.join(BACKUP_DIR, "*")))[:-28]:
+        os.remove(f)
+    bucket = os.environ.get("BUCKET_NAME")
+    if bucket:
+        import boto3
+        s3 = boto3.client("s3", endpoint_url=os.environ.get("AWS_ENDPOINT_URL_S3", "https://fly.storage.tigris.dev"))
+        for f in (dbp, tarp):
+            s3.upload_file(f, bucket, "backups/" + os.path.basename(f))
+        log.info("backup uploaded to %s", bucket)
+    db.kv_set("backup:last", json.dumps({"at": time.time(), "db": os.path.getsize(dbp), "heating": os.path.getsize(tarp), "bucket": bool(bucket)}))
+
+
+def backup_loop():
+    while True:
+        now = datetime.now(TZ)
+        nxt = now.replace(hour=3, minute=30, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += __import__("datetime").timedelta(days=1)
+        time.sleep((nxt - now).total_seconds())
+        try:
+            backup_once()
+        except Exception as e:
+            log.warning("backup: %s", e)
+
+
+@app.post("/admin/backup")
+def admin_backup(request: Request):
+    require(request, admin=True)
+    threading.Thread(target=backup_once, daemon=True).start()
+    return RedirectResponse("/admin?msg=Backup+started", status_code=303)
+
+
 # ------------------------------------------------------------------ admin
 @app.get("/admin", response_class=HTMLResponse)
 def admin(request: Request, msg: str = ""):
@@ -845,8 +943,13 @@ def admin(request: Request, msg: str = ""):
     for r in db.q("SELECT gc.group_id, c.name FROM group_cameras gc JOIN cameras c ON c.id=gc.camera_id ORDER BY c.name"):
         gcams.setdefault(r["group_id"], []).append(r["name"])
     recent_sms = db.q("SELECT * FROM sms_log ORDER BY at DESC LIMIT 15")
+    watch = []
+    for r in db.q("SELECT k, v FROM kv WHERE k LIKE 'watch:%'"):
+        j = json.loads(r["v"]); j["url"] = r["k"][6:]; watch.append(j)
+    backup = json.loads(db.kv_get("backup:last") or "null")
     return render(request, "admin.html", houses=houses, cams=cams, people=people, groups=groups, members=members,
-                  gcams=gcams, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms)
+                  gcams=gcams, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
+                  heating=_heating_state, watch=watch, backup=backup)
 
 
 @app.post("/admin/house")
@@ -994,6 +1097,8 @@ async def startup():
         threading.Thread(target=heating_loop, name="heating", daemon=True).start()
     else:
         log.warning("TPLINK_EMAIL not set: streams and health checks disabled")
+    threading.Thread(target=watch_loop, name="watchdog", daemon=True).start()
+    threading.Thread(target=backup_loop, name="backup", daemon=True).start()
     asyncio.create_task(_register_later())
 
 
