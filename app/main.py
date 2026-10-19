@@ -574,6 +574,49 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
 # ------------------------------------------------------------------ events + alerts
 COOLDOWN = {"doorbell": 90, "tamper": 600, "motion": 900, "offline": 1800, "online": 1800}
 _last_sms = {}
+BATCH_KINDS = {"offline", "online"}
+BATCH_WINDOW = int(os.environ.get("ALERT_BATCH_SECONDS", "90"))
+_batch = {}            # person_id -> {kind: {house: [camera names]}}
+_batch_lock = threading.Lock()
+_batch_timer = None
+
+
+def _flush_batch():
+    """One text per person summarising everything that changed in the window, grouped by house."""
+    global _batch_timer
+    with _batch_lock:
+        items = {pid: kinds for pid, kinds in list(_batch.items())}
+        _batch.clear(); _batch_timer = None
+    base = os.environ.get("BASE_URL", "").rstrip("/")
+    for pid, kinds in items.items():
+        p = db.one("SELECT * FROM people WHERE id=?", pid)
+        if not p:
+            continue
+        parts = []
+        for kind in ("offline", "online"):
+            for house, names in kinds.get(kind, {}).items():
+                names = sorted(set(names))
+                what = "offline" if kind == "offline" else "back online"
+                if len(names) == 1:
+                    parts.append(f"{names[0]} at {house} is {what}.")
+                else:
+                    parts.append(f"{len(names)} cameras at {house} are {what}: {', '.join(names)}.")
+        if parts:
+            text = " ".join(parts)
+            if base and any("online" in k for k in kinds):
+                text += f" {base}/"
+            sms.send(p["phone"], text, kind="status", person_id=pid)
+
+
+def _queue_alert(person, cam, kind):
+    """Collect offline/online changes for a short window so a whole house reconnecting is one text."""
+    global _batch_timer
+    house = db.one("SELECT name FROM houses WHERE id=?", cam["house_id"]) if cam["house_id"] else None
+    hname = house["name"] if house else "Unassigned"
+    with _batch_lock:
+        _batch.setdefault(person["id"], {}).setdefault(kind, {}).setdefault(hname, []).append(cam["name"])
+        if _batch_timer is None:
+            _batch_timer = threading.Timer(BATCH_WINDOW, _flush_batch); _batch_timer.daemon = True; _batch_timer.start()
 
 
 def record_event(cam, kind, detail="", at=None):
@@ -594,7 +637,10 @@ def record_event(cam, kind, detail="", at=None):
         if time.time() - _last_sms.get(key, 0) < COOLDOWN.get(kind, 600):
             continue
         _last_sms[key] = time.time()
-        sms.send(p["phone"], text, kind=kind, person_id=p["id"])
+        if kind in BATCH_KINDS:
+            _queue_alert(p, cam, kind)        # one text per house, sent after the window closes
+        else:
+            sms.send(p["phone"], text, kind=kind, person_id=p["id"])
     return eid
 
 
