@@ -252,3 +252,13 @@ button.busy{opacity:.7;cursor:progress}
 .calGrid.loading{opacity:.4;pointer-events:none}
 .thumb img{opacity:0;transition:opacity .3s}.thumb img.in{opacity:1}
 @media (prefers-reduced-motion: reduce){.pbar.on,.spin,.tl.loading .track::after{animation:none}}
+
+/* pan / tilt pad over the live picture */
+.ptz{position:absolute;right:10px;bottom:10px;display:grid;grid-template-columns:repeat(3,40px);grid-template-rows:repeat(3,40px);gap:2px;opacity:.8;transition:opacity .2s;z-index:3}
+.ptz:hover{opacity:1}
+.ptz button{width:40px;height:40px;margin:0;padding:0;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:13px;border:1px solid rgba(255,255,255,.3);display:flex;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;backdrop-filter:blur(4px);cursor:pointer}
+.ptz button:active,.ptz button.busy{background:var(--acc);border-color:var(--acc)}
+.ptz.err button{border-color:var(--bad)}
+.ptz button[data-dir=up]{grid-area:1/2}.ptz button[data-dir=left]{grid-area:2/1}.ptz button[data-dir=right]{grid-area:2/3}.ptz button[data-dir=down]{grid-area:3/2}
+.stage.hasPtz .spinner{right:136px}
+@media (max-width:640px){.ptz{grid-template-columns:repeat(3,36px);grid-template-rows:repeat(3,36px)}.ptz button{width:36px;height:36px}}

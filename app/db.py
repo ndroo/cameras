@@ -41,6 +41,7 @@ MIGRATIONS = [
     "ALTER TABLE people ADD COLUMN email TEXT",
     "ALTER TABLE people ADD COLUMN passcode_hash TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS people_email ON people(email)",
+    "ALTER TABLE cameras ADD COLUMN ptz INTEGER",   # NULL until probed; 1 = can pan/tilt
 ]
 
 

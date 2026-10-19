@@ -36,7 +36,7 @@
     {% for c in cams %}
     <tr><form method="post" action="/admin/camera">
       <input type="hidden" name="id" value="{{ c.id }}">
-      <td><input name="name" value="{{ c.name }}"><div class="muted tiny">{{ c.model }} · {{ c.device_id[:8] }}…</div></td>
+      <td><input name="name" value="{{ c.name }}"><div class="muted tiny">{{ c.model }}{% if c.ptz %} · pan/tilt{% endif %} · {{ c.device_id[:8] }}…</div></td>
       <td><select name="house_id"><option value="0">—</option>{% for h in houses %}<option value="{{ h.id }}" {% if h.id == c.house_id %}selected{% endif %}>{{ h.name }}</option>{% endfor %}</select></td>
       <td><select name="rotate">{% for r in [0,90,180,270] %}<option value="{{ r }}" {% if c.rotate == r %}selected{% endif %}>{{ r }}°</option>{% endfor %}</select>
           <label class="chk"><input type="checkbox" name="flip_h" value="1" {% if c.flip_h %}checked{% endif %}>mirror</label>

@@ -295,7 +295,7 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     sd = None            # card status is fetched by the page after it renders (see recordings.json)
     data = {"camId": cam_id, "name": cam["name"], "date": date, "dayStart": day_start, "dayEnd": day_end, "at": int(at) if at.isdigit() else 0,
             "maxClip": MAX_CLIP_SECONDS, "maxDownload": MAX_DOWNLOAD_SECONDS, "rotate": cam["rotate"], "flipH": cam["flip_h"], "flipV": cam["flip_v"],
-            "isAdmin": bool(me["is_admin"]), "tz": str(TZ)}
+            "isAdmin": bool(me["is_admin"]), "tz": str(TZ), "ptz": bool(cam["ptz"])}
     return render(request, "cam.html", cam=cam, sd=sd, me=me, data=json.dumps(data))
 
 
@@ -323,6 +323,34 @@ def events_page(request: Request):
 def cam_orientation(request: Request, cam_id: int, rotate: int = Form(0), flip_h: int = Form(0), flip_v: int = Form(0)):
     require(request, admin=True)
     db.run("UPDATE cameras SET rotate=?, flip_h=?, flip_v=? WHERE id=?", rotate % 360, 1 if flip_h else 0, 1 if flip_v else 0, cam_id)
+    return JSONResponse({"ok": True})
+
+
+_ptz_locks = {}
+
+
+@app.post("/cam/{cam_id}/ptz")
+async def cam_ptz(request: Request, cam_id: int, x: int = Form(0), y: int = Form(0)):
+    """Pan/tilt by a few degrees. Anyone who can watch the camera may move it (as in the Tapo app)."""
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404, "No such camera")
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam["ptz"]:
+        return JSONResponse({"ok": False, "error": "This camera cannot pan or tilt."}, status_code=400)
+    x, y = max(-45, min(45, x)), max(-45, min(45, y))
+    if not x and not y:
+        return JSONResponse({"ok": True})
+    lock = _ptz_locks.setdefault(cam_id, threading.Lock())
+
+    def go():
+        with lock:                      # one motor command per camera at a time
+            tapo.ptz_move(cloud, cam["device_id"], x, y)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, go)
+    except Exception as e:
+        log.warning("ptz %s: %s", cam["name"], e)
+        return JSONResponse({"ok": False, "error": "The camera did not move. Try again."}, status_code=502)
     return JSONResponse({"ok": True})
 
 
@@ -746,6 +774,11 @@ def check_camera(cam):
                "online_since=COALESCE(CASE WHEN online=1 THEN online_since END, ?) WHERE id=?", time.time(), time.time(), cam["id"])
         if was == 0:
             record_event(cam, "online")
+        if cam["ptz"] is None:          # first successful check: find out whether it has a motor
+            try:
+                db.run("UPDATE cameras SET ptz=? WHERE id=?", 1 if tapo.ptz_supported(cloud, cam["device_id"]) else 0, cam["id"])
+            except Exception as e:
+                log.warning("ptz probe %s: %s", cam["name"], e)
     except Exception as e:
         fails = (cam["fail_count"] or 0) + 1
         log.warning("health %s: %s (fail %d)", cam["name"], e, fails)

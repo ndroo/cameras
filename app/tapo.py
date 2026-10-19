@@ -17,7 +17,9 @@ log = logging.getLogger("tapo")
 
 # The Tapo app's request-signing key pair. They are the same in every install of the app,
 # but they belong to TP-Link, so they come from the environment rather than living here.
-AK, SK = os.environ.get("TAPO_ACCESS_KEY", ""), os.environ.get("TAPO_SECRET_KEY", "")
+# Read at call time (not import time) so a local .env loaded by main.py still counts.
+def _keys():
+    return os.environ.get("TAPO_ACCESS_KEY", ""), os.environ.get("TAPO_SECRET_KEY", "")
 APP, VER = "TP-Link_Tapo_Android", "3.7.113"
 GW = "https://n-wap-gw.tplinkcloud.com"
 DEFAULT_MQTT_GW = "use1-app-cloudgateway.iot.i.tplinknbu.com"
@@ -49,6 +51,7 @@ class TapoCloud:
             b = json.dumps(body, separators=(',', ':')).encode()
             md5 = base64.b64encode(hashlib.md5(b).digest()).decode()
             nonce = str(uuid.uuid4()); path = "/api/v2/account/login"
+            AK, SK = _keys()
             sig = hmac.new(SK.encode(), f"{md5}\n9999999999\n{nonce}\n{path}".encode(), hashlib.sha1).hexdigest()
             h = {"Content-Type": "application/json; charset=UTF-8", "Content-MD5": md5,
                  "X-Authorization": f"Timestamp=9999999999, Nonce={nonce}, AccessKey={AK}, Signature={sig}"}
@@ -473,6 +476,21 @@ def sd_status(cloud, device_id):
     info = _unwrap_list(r[0].get("result", {}).get("harddisk_manage", {}).get("hd_info")) if r else []
     log.info("sd status %s: %s", device_id[:8], json.dumps(info)[:400])
     return info[0] if info else None
+
+
+def ptz_supported(cloud, device_id):
+    """True when the camera has a pan/tilt motor. Fixed cameras (C100, doorbell) answer
+    getPresetConfig with -40101; the C210 returns its preset list (possibly empty)."""
+    r = device_call(cloud, device_id, [{"method": "getPresetConfig", "params": {"preset": {"name": ["preset"]}}}])
+    return bool(r) and r[0].get("error_code", -1) == 0
+
+
+def ptz_move(cloud, device_id, x, y):
+    """Turn the camera by x degrees (right is positive) and y degrees (up is positive)."""
+    r = device_call(cloud, device_id, [{"method": "motorMove", "params": {"motor": {"move": {"x_coord": str(int(x)), "y_coord": str(int(y))}}}}], timeout=15)
+    code = r[0].get("error_code", -1) if r else -1
+    if code != 0:
+        raise RuntimeError(f"motor error {code}")
 
 
 def _client_part(obj):

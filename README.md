@@ -17,6 +17,11 @@ Tapo app is still used to configure cameras.
   browser via go2rtc's `video-stream` web component, proxied with auth by FastAPI.
 - **Orientation**: rotate / mirror / flip per camera. Admin clicks save as the default
   for everyone; a non-admin's choice is remembered in their browser.
+- **Pan / tilt**: cameras with a motor (C210 and the like) get an arrow pad over the
+  live picture; each press turns the camera 10 degrees, hold to keep going. Arrows follow
+  the displayed orientation, so "up" moves the picture up even on a camera mounted upside
+  down. Support is probed once (`getPresetConfig`) during the first health check and
+  stored in `cameras.ptz`; the move itself is `motorMove` through the cloud passthrough.
 - **Health**: every `HEALTH_INTERVAL` seconds each camera is asked for a relay and a
   frame (also the thumbnail on the home page). Two failures in a row = offline event
   (+ text to groups with the offline alert), recovery = back-online event.

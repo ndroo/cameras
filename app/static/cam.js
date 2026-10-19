@@ -47,7 +47,7 @@ function goLive() {
   live.style.display = ""; live.src = `/stream/${D.camId}/ws`;
   modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.hidden = true; speed.hidden = true;
   poster.style.opacity = ".6"; showHint("Connecting to camera…"); status.textContent = "";
-  S.t = now(); keepInView(S.t); history.replaceState(null, "", `/cam/${D.camId}`); layout(); draw();
+  S.t = now(); keepInView(S.t); history.replaceState(null, "", `/cam/${D.camId}`); layout(); draw(); showPtz();
 }
 const covered = t => S.clips.find(c => c.start <= t && t < c.end);
 function snap(t) {
@@ -67,7 +67,7 @@ function play(t) {
   if (n === null) { status.textContent = "No footage after that time on this day."; S.t = t; draw(); return; }
   const c = covered(n); t = n;
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
-  live.src = ""; live.style.display = "none"; clip.hidden = false;
+  live.src = ""; live.style.display = "none"; clip.hidden = false; showPtz();
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}`;
   clip.src = url; clip.playbackRate = +speed.value; clip.play().catch(() => {});
   speed.hidden = false;
@@ -102,6 +102,41 @@ $("#player .controls").addEventListener("click", ev => {
   }
 });
 window.addEventListener("resize", layout); document.addEventListener("fullscreenchange", layout);
+
+// ---------------------------------------------------------------- pan / tilt (cameras with a motor, live view only)
+const ptz = $("#ptz"), PTZ_STEP = 10;
+function camVector(dir) {
+  // screen direction -> camera pan/tilt, undoing the display rotation and flips so "up" moves the picture up
+  const [sx, sy] = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[dir];   // screen y grows downward
+  const a = -o.rotate * Math.PI / 180, c = Math.round(Math.cos(a)), s = Math.round(Math.sin(a));
+  let x = sx * c - sy * s, y = sx * s + sy * c;
+  if (o.flip_h) x = -x;
+  if (o.flip_v) y = -y;
+  return [x * PTZ_STEP, -y * PTZ_STEP];                  // camera: pan right positive, tilt up positive
+}
+let ptzBusy = false, ptzHold = null;
+async function ptzMove(dir, btn) {
+  if (ptzBusy) return;
+  ptzBusy = true; btn.classList.add("busy"); ptz.classList.remove("err");
+  const [x, y] = camVector(dir), fd = new FormData(); fd.set("x", x); fd.set("y", y);
+  try { const r = await fetch(`/cam/${D.camId}/ptz`, { method: "POST", body: fd }); if (!r.ok) throw 0; }
+  catch { ptz.classList.add("err"); setTimeout(() => ptz.classList.remove("err"), 1500); }
+  finally { ptzBusy = false; btn.classList.remove("busy"); }
+}
+function showPtz() { ptz.hidden = !(D.ptz && S.mode === "live"); }
+if (D.ptz) {
+  stage.classList.add("hasPtz");
+  const stop = () => { if (ptzHold) { clearInterval(ptzHold); ptzHold = null; } };
+  ptz.addEventListener("pointerdown", ev => {
+    const b = ev.target.closest("button[data-dir]"); if (!b) return;
+    ev.preventDefault(); stop();
+    const go = () => ptzMove(b.dataset.dir, b);
+    go(); ptzHold = setInterval(go, 350);                 // hold to keep turning
+  });
+  for (const t of ["pointerup", "pointercancel", "pointerleave"]) ptz.addEventListener(t, stop);
+  window.addEventListener("blur", stop);
+  ptz.addEventListener("contextmenu", ev => ev.preventDefault());
+}
 
 // ---------------------------------------------------------------- timeline (one zoomable day bar)
 const KIND = { motion: ["#ff9f0a", "motion"], person: ["#34c759", "person"], ring: ["#bf5af2", "doorbell"], "missed doorbell ring": ["#bf5af2", "doorbell"],

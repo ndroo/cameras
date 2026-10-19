@@ -12,6 +12,12 @@
     <video id="clip" playsinline muted hidden></video>
     <img class="poster" src="/stream/{{ cam.id }}/thumb.jpg?t={{ cam.thumb_at|int }}" alt="">
     <div class="spinner" id="hint"><i class="spin"></i>Connecting to camera…</div>
+    <div class="ptz" id="ptz" hidden aria-label="Pan and tilt">
+      <button type="button" data-dir="up" title="Tilt up">▲</button>
+      <button type="button" data-dir="left" title="Pan left">◀</button>
+      <button type="button" data-dir="right" title="Pan right">▶</button>
+      <button type="button" data-dir="down" title="Tilt down">▼</button>
+    </div>
   </div>
   <div class="controls">
     <button type="button" class="pill live" id="modeBtn" title="Back to live"><i></i><span id="modeTxt">LIVE</span></button>
