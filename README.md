@@ -18,7 +18,7 @@ Tapo app is still used to configure cameras.
 - **Orientation**: rotate / mirror / flip per camera. Admin clicks save as the default
   for everyone; a non-admin's choice is remembered in their browser.
 - **Pan / tilt**: cameras with a motor (C210 and the like) get an arrow pad over the
-  live picture; each press turns the camera 10 degrees, hold to keep going. Arrows follow
+  live picture, for admins only (everyone else can watch but not move the camera); each press turns the camera 10 degrees, hold to keep going. Arrows follow
   the displayed orientation, so "up" moves the picture up even on a camera mounted upside
   down. Support is probed once (`getPresetConfig`) during the first health check and
   stored in `cameras.ptz`; the move itself is `motorMove` through the cloud passthrough.

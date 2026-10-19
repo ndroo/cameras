@@ -295,7 +295,7 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     sd = None            # card status is fetched by the page after it renders (see recordings.json)
     data = {"camId": cam_id, "name": cam["name"], "date": date, "dayStart": day_start, "dayEnd": day_end, "at": int(at) if at.isdigit() else 0,
             "maxClip": MAX_CLIP_SECONDS, "maxDownload": MAX_DOWNLOAD_SECONDS, "rotate": cam["rotate"], "flipH": cam["flip_h"], "flipV": cam["flip_v"],
-            "isAdmin": bool(me["is_admin"]), "tz": str(TZ), "ptz": bool(cam["ptz"])}
+            "isAdmin": bool(me["is_admin"]), "tz": str(TZ), "ptz": bool(cam["ptz"]) and bool(me["is_admin"])}
     return render(request, "cam.html", cam=cam, sd=sd, me=me, data=json.dumps(data))
 
 
@@ -331,11 +331,11 @@ _ptz_locks = {}
 
 @app.post("/cam/{cam_id}/ptz")
 async def cam_ptz(request: Request, cam_id: int, x: int = Form(0), y: int = Form(0)):
-    """Pan/tilt by a few degrees. Anyone who can watch the camera may move it (as in the Tapo app)."""
-    me = require(request)
-    if not db.can_view(me, cam_id):
-        raise HTTPException(404, "No such camera")
+    """Pan/tilt by a few degrees. Admins only: everyone else can watch but not move it."""
+    require(request, admin=True)
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404, "No such camera")
     if not cam["ptz"]:
         return JSONResponse({"ok": False, "error": "This camera cannot pan or tilt."}, status_code=400)
     x, y = max(-45, min(45, x)), max(-45, min(45, y))
