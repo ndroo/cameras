@@ -43,9 +43,13 @@ video.addEventListener("ended", () => { const n = nextCovered(state.segEnd + 1);
 video.addEventListener("error", () => { hint.textContent = "Couldn't load that part. Try another time."; hint.style.display = ""; });
 
 // ---------------------------------------------------------------- timelines
+const hourStart = t => Math.max(state.dayStart, Math.min(state.dayEnd - 3600, Math.floor(t / 3600) * 3600));
+const shortT = t => { const d = new Date(t * 1000); const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, hour: "numeric", minute: "2-digit", hour12: true }).formatToParts(d);
+  const h = parts.find(p => p.type === "hour").value, m = parts.find(p => p.type === "minute").value, ap = (parts.find(p => p.type === "dayPeriod") || {}).value || "";
+  return m === "00" ? `${h} ${ap}` : `${h}:${m}`; };
 const tracks = [
-  { el: $("#track24"), range: () => [state.dayStart, state.dayEnd], ticks: 24, tickEvery: 1, labelEvery: 6 },
-  { el: $("#track1"), range: () => { const a = Math.max(state.dayStart, Math.min(state.t - 1800, state.dayEnd - 3600)); return [a, a + 3600]; }, ticks: 60, tickEvery: 5, labelEvery: 15 },
+  { el: $("#track24"), range: () => [state.dayStart, state.dayEnd], ticks: 24, tickEvery: 1, labelEvery: 6, fmt: shortT },
+  { el: $("#track1"), range: () => { const a = hourStart(state.t); return [a, a + 3600]; }, ticks: 60, tickEvery: 5, labelEvery: 15, fmt: shortT },
 ];
 function draw() {
   for (const tr of tracks) {
@@ -60,7 +64,7 @@ function draw() {
     for (let i = 0; i <= tr.ticks; i += tr.tickEvery) {
       const k = document.createElement("div"); k.className = "tick" + (i % tr.labelEvery === 0 ? " major" : "");
       k.style.left = (i / tr.ticks * 100) + "%";
-      if (i % tr.labelEvery === 0 && i < tr.ticks) k.dataset.l = fmtT(a + i / tr.ticks * span).replace(":00", "");
+      if (i % tr.labelEvery === 0 && i < tr.ticks) k.dataset.l = tr.fmt(a + i / tr.ticks * span);
       ticks.appendChild(k);
     }
     const head = tr.el.querySelector(".head");
@@ -68,6 +72,9 @@ function draw() {
     head.style.display = inside ? "" : "none";
     head.style.left = ((state.t - a) / span * 100) + "%";
   }
+  const [ha] = tracks[1].range(), zoom = $("#track24 .zoom");
+  zoom.style.left = ((ha - state.dayStart) / 86400 * 100) + "%"; zoom.style.width = (3600 / 86400 * 100) + "%";
+  $("#hourTitle").textContent = `${shortT(ha)} – ${shortT(ha + 3600)}`;
   $("#tlTime").textContent = state.t ? fmtTs(state.t) : "";
   $("#dayTitle").textContent = fmtD(state.date);
 }
@@ -80,6 +87,9 @@ for (const tr of tracks) {
   el.addEventListener("pointerup", ev => { if (drag !== tr) return; drag = null; play(tAt(ev)); });
   el.addEventListener("pointercancel", () => { drag = null; });
 }
+
+$("#prevH").addEventListener("click", () => { const a = hourStart(state.t) - 3600; if (a >= state.dayStart) { state.t = a; draw(); } });
+$("#nextH").addEventListener("click", () => { const a = hourStart(state.t) + 3600; if (a < state.dayEnd) { state.t = a; draw(); } });
 
 // ---------------------------------------------------------------- calendar
 async function loadMonth(m) {

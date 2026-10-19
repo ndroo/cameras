@@ -19,9 +19,10 @@
 
 <div class="card tl">
   <div class="tlHead"><b id="dayTitle"></b><span class="muted small" id="tlTime"></span></div>
-  <div class="track" id="track24" title="Drag to a time"><div class="segs"></div><div class="ticks"></div><div class="head"></div></div>
+  <div class="track" id="track24" title="Drag to a time"><div class="segs"></div><div class="zoom"></div><div class="ticks"></div><div class="head"></div></div>
+  <div class="tlHead hourHead"><button type="button" class="secondary small" id="prevH">‹</button><span class="small" id="hourTitle"></span><button type="button" class="secondary small" id="nextH">›</button></div>
   <div class="track hour" id="track1"><div class="segs"></div><div class="ticks"></div><div class="head"></div></div>
-  <div class="muted tiny">Top bar is the whole day; bottom bar is the hour around the playhead. Shaded = footage on the card{% if cam.device_type == 'SMART.TAPODOORBELL' %}, orange = motion{% endif %}.</div>
+  <div class="muted tiny">Drag either bar. The lower bar zooms into the hour highlighted on the day bar. Shaded = footage on the card{% if cam.device_type == 'SMART.TAPODOORBELL' %}, orange = motion{% endif %}.</div>
 </div>
 
 <div class="card cal">
