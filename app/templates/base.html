@@ -14,7 +14,7 @@
 </head>
 <body>
 <header class="top">
-  {% block back %}{% endblock %}<a href="/" class="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h13v9H3z"/><path d="M16 11l5-3v8l-5-3z"/></svg> Cameras</a>
+  <span class="left">{% block back %}{% endblock %}<a href="/" class="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h13v9H3z"/><path d="M16 11l5-3v8l-5-3z"/></svg> Cameras</a></span>
   <nav>
     {% if me %}
       <a href="/events" class="{% if request.url.path == '/events' %}on{% endif %}">Events</a>
