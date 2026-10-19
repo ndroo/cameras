@@ -26,17 +26,23 @@ function drawWall() {
   for (const [id, t] of tiles) if (!sel.has(id)) { t.vs.src = ""; t.el.remove(); tiles.delete(id); }
   for (const c of chosen) {
     if (tiles.has(c.id)) continue;
-    const el = document.createElement("a"); el.className = "tile wallTile"; el.href = `/cam/${c.id}`;
-    el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner">Connecting…</div></div><div class="tileBody"><span class="name">${c.name}</span><span class="status muted">${c.house || ""}</span></div>`;
+    const el = document.createElement("a"); el.className = "wallTile"; el.href = `/cam/${c.id}`;
+    el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner">Connecting…</div>
+      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}</span></div></div>`;
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
     stage.prepend(vs);
+    wall.appendChild(el);
     const poster = stage.querySelector(".poster"), hint = stage.querySelector(".spinner");
     const lay = () => { for (const x of [vs, poster]) applyToBox(stage, x, c.rotate, c.flipH, c.flipV); };
-    if (vs.video) { const v = vs.video; v.muted = true; v.controls = false; v.setAttribute("playsinline", "");
-      v.addEventListener("playing", () => { poster.style.opacity = "0"; hint.style.display = "none"; });
+    const shown = () => { poster.style.opacity = "0"; hint.style.display = "none"; };
+    const v = vs.video;
+    if (v) { v.muted = true; v.controls = false; v.setAttribute("playsinline", "");
+      v.addEventListener("playing", shown);
       v.addEventListener("waiting", () => { hint.style.display = ""; hint.textContent = "Reconnecting…"; }); }
+    // belt and braces: some modes never fire "playing" on the inner element
+    const poll = setInterval(() => { const vv = vs.video; if (vv && vv.readyState >= 3 && !vv.paused && vv.currentTime > 0) { shown(); } if (!tiles.has(c.id)) clearInterval(poll); }, 500);
     vs.src = `/stream/${c.id}/ws`;
-    wall.appendChild(el); tiles.set(c.id, { el, vs, lay }); lay();
+    tiles.set(c.id, { el, vs, lay }); lay();
     new ResizeObserver(lay).observe(stage);
   }
 }
