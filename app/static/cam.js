@@ -21,10 +21,11 @@ const S = { mode: "live", date: D.date, dayStart: D.dayStart, dayEnd: D.dayEnd, 
 
 // ---------------------------------------------------------------- player
 const wrap = $("#camWrap");
+let knownAr = 16 / 9; try { knownAr = +localStorage.getItem("ar:" + D.camId) || knownAr; } catch {}
+function noteAr(v) { if (v && v.videoWidth && v.videoHeight) { const ar = v.videoWidth / v.videoHeight; if (Math.abs(ar - knownAr) > 0.01) { knownAr = ar; try { localStorage.setItem("ar:" + D.camId, ar); } catch {} layout(); } } }
 function layout() {
   const side = o.rotate === 90 || o.rotate === 270;
-  const v = S.mode === "live" ? live.video : clip;
-  const ar0 = (v && v.videoWidth && v.videoHeight) ? v.videoWidth / v.videoHeight : 16 / 9;
+  const ar0 = knownAr;
   const ar = side ? 1 / ar0 : ar0;                       // shape of the picture as shown
   // size the whole column to the picture: as wide as the page allows, but no taller than ~56% of the window
   const maxW = wrap.parentElement.clientWidth, maxH = window.innerHeight * 0.56;
@@ -49,6 +50,15 @@ function goLive() {
   S.t = now(); keepInView(S.t); history.replaceState(null, "", `/cam/${D.camId}`); layout(); draw();
 }
 const covered = t => S.clips.find(c => c.start <= t && t < c.end);
+function snap(t) {
+  // nearest moment that has footage; "now" counts as footage on today's bar
+  if (covered(t)) return t;
+  const cands = [];
+  for (const c of S.clips) { cands.push(c.start); cands.push(c.end - 1); }
+  if (S.date === today()) cands.push(now());
+  if (!cands.length) return t;
+  return cands.reduce((best, x) => Math.abs(x - t) < Math.abs(best - t) ? x : best, cands[0]);
+}
 const nextCovered = t => { const c = S.clips.filter(c => c.end > t).sort((a, b) => a.start - b.start)[0]; return c ? Math.max(t, c.start) : null; };
 
 function play(t) {
@@ -67,14 +77,14 @@ function play(t) {
 }
 clip.addEventListener("playing", () => { hideHint(); S.playing = true; });
 clip.addEventListener("waiting", () => showHint("Buffering…"));
-clip.addEventListener("loadedmetadata", layout);
+clip.addEventListener("loadedmetadata", () => noteAr(clip));
 clip.addEventListener("timeupdate", () => { if (S.mode === "play" && S.playing && !drag) { S.t = S.segStart + clip.currentTime; keepInView(S.t); draw(); } });
 clip.addEventListener("ended", () => { const n = nextCovered(S.segEnd + 1); if (n !== null && n < S.dayEnd) play(n); else if (S.date === today()) goLive(); else status.textContent = "End of footage for this day."; });
 clip.addEventListener("error", () => showHint("Couldn't load that part. Try another time."));
 if (live.video) {
   const v = live.video; v.setAttribute("playsinline", ""); v.muted = true; v.controls = false;
   v.addEventListener("playing", () => { if (S.mode === "live") { hideHint(); poster.style.opacity = "0"; layout(); } });
-  v.addEventListener("loadedmetadata", layout);
+  v.addEventListener("loadedmetadata", () => noteAr(v));
   v.addEventListener("waiting", () => { if (S.mode === "live") showHint("Reconnecting…"); });
 }
 modeBtn.addEventListener("click", () => { if (S.mode !== "live") goLive(); });
@@ -155,7 +165,7 @@ track.addEventListener("pointerdown", ev => {
   track.setPointerCapture(ev.pointerId); ptrs.set(ev.pointerId, ev.clientX); ev.preventDefault();
   if (ptrs.size === 2) { const [x1, x2] = [...ptrs.values()]; pinch = { d: Math.abs(x2 - x1), mid: tAt((x1 + x2) / 2), view: vis().slice() }; drag = null; return; }
   if (cut.on) { cut.dragging = true; cut.a = tAt(ev.clientX); cut.b = cut.a; drawCut(); return; }
-  drag = true; S.t = tAt(ev.clientX); draw();
+  drag = true; S.t = snap(tAt(ev.clientX)); draw();
 });
 track.addEventListener("pointermove", ev => {
   if (!ptrs.has(ev.pointerId)) return; ptrs.set(ev.pointerId, ev.clientX);
@@ -163,9 +173,9 @@ track.addEventListener("pointermove", ev => {
     const span = (pinch.view[1] - pinch.view[0]) * pinch.d / d; const r = track.getBoundingClientRect(); const f = ((x1 + x2) / 2 - r.left) / r.width;
     setView(pinch.mid - f * span, pinch.mid + (1 - f) * span); return; }
   if (cut.dragging) { cut.b = tAt(ev.clientX); drawCut(); return; }
-  if (drag) { S.t = tAt(ev.clientX); draw(); }
+  if (drag) { S.t = snap(tAt(ev.clientX)); draw(); }
 });
-const endPtr = ev => { ptrs.delete(ev.pointerId); if (ptrs.size < 2) pinch = null; if (cut.dragging) { cut.dragging = false; cut.b = tAt(ev.clientX); drawCut(); return; } if (drag && ptrs.size === 0) { drag = null; const t = tAt(ev.clientX); const r = track.getBoundingClientRect();
+const endPtr = ev => { ptrs.delete(ev.pointerId); if (ptrs.size < 2) pinch = null; if (cut.dragging) { cut.dragging = false; cut.b = tAt(ev.clientX); drawCut(); return; } if (drag && ptrs.size === 0) { drag = null; const t = snap(tAt(ev.clientX)); const r = track.getBoundingClientRect();
   if (S.date === today() && (t >= now() - 30 || ev.clientX >= r.right - 6)) goLive(); else play(t); } };
 track.addEventListener("pointerup", endPtr); track.addEventListener("pointercancel", endPtr);
 track.addEventListener("wheel", ev => { ev.preventDefault(); if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY) && view) { const [a, b] = view, s = b - a; setView(a + ev.deltaX / track.clientWidth * s, b + ev.deltaX / track.clientWidth * s); }
