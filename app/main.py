@@ -792,11 +792,18 @@ def heating_loop():
 HEATING_PAGES = {"": "index.html", "index.html": "index.html", "legend.html": "legend.html", "history.html": "history.html"}
 
 
+HEATING_SITE = os.environ.get("HEATING_SITE", "https://180beatrice.andrewmcgrath.info/heating")
+
+
 @app.get("/heating")
 @app.get("/heating/")
+def heating_root():
+    return RedirectResponse(HEATING_SITE, status_code=302)   # the canonical page lives on the 180 Beatrice site
+
+
 @app.get("/heating/{page}")
 def heating_page(page: str = ""):
-    """The heating dashboard. Public on purpose: it shows mechanical equipment only."""
+    """Legend and history pages, plus the data the site's dashboard reads. Public on purpose."""
     name = HEATING_PAGES.get(page)
     if not name:
         raise HTTPException(404)
