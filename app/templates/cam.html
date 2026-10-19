@@ -1,12 +1,12 @@
 {% extends "base.html" %}{% block title %}{{ cam.name }} · Cameras{% endblock %}
+{% block back %}<a href="/" class="topBack" title="All cameras">‹</a>{% endblock %}
 {% block body %}
+<div class="camWrap" id="camWrap">
 <div class="camHead">
-  <a href="/" class="back">‹ All cameras</a>
   <h1>{{ cam.name }} <span class="muted">{{ cam.house_name or '' }}</span>
     <span class="status"><span class="dot {{ 'ok' if cam.online == 1 else ('bad' if cam.online == 0 else 'unk') }}"></span>{% if cam.online == 1 %}online{% elif cam.online == 0 %}offline since {{ cam.online_since|ago }}{% else %}checking{% endif %}</span></h1>
 </div>
 
-<div class="camWrap">
 <div class="player" id="player">
   <div class="stage" id="stage">
     <video-stream id="live" mode="mse,hls,mp4,mjpeg" background="true"></video-stream>

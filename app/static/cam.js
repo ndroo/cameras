@@ -20,12 +20,17 @@ const S = { mode: "live", date: D.date, dayStart: D.dayStart, dayEnd: D.dayEnd, 
             t: now(), segStart: 0, segEnd: 0, playing: false, loaded: false };
 
 // ---------------------------------------------------------------- player
+const wrap = $("#camWrap");
 function layout() {
   const side = o.rotate === 90 || o.rotate === 270;
   const v = S.mode === "live" ? live.video : clip;
-  const ar = (v && v.videoWidth && v.videoHeight) ? v.videoWidth / v.videoHeight : 16 / 9;
-  const w = stage.clientWidth; let h = side ? w * ar : w / ar; h = Math.min(h, window.innerHeight * 0.56);
-  stage.style.aspectRatio = "auto"; stage.style.height = h + "px";
+  const ar0 = (v && v.videoWidth && v.videoHeight) ? v.videoWidth / v.videoHeight : 16 / 9;
+  const ar = side ? 1 / ar0 : ar0;                       // shape of the picture as shown
+  // size the whole column to the picture: as wide as the page allows, but no taller than ~56% of the window
+  const maxW = wrap.parentElement.clientWidth, maxH = window.innerHeight * 0.56;
+  const w = Math.min(maxW, Math.max(320, maxH * ar)), h = w / ar;
+  wrap.style.maxWidth = (window.innerWidth >= 1000 ? Math.round(w) + "px" : "");
+  stage.style.aspectRatio = "auto"; stage.style.height = Math.round(window.innerWidth >= 1000 ? h : stage.clientWidth / ar) + "px";
   for (const el of [live, clip, poster]) applyToBox(stage, el, o.rotate, o.flip_h, o.flip_v);
 }
 async function saveOrient() {
