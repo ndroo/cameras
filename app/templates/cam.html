@@ -2,39 +2,68 @@
 {% block body %}
 <div class="camHead">
   <a href="/" class="back">‹ All cameras</a>
-  <h1>{{ cam.name }} <span class="muted">{{ cam.house_name or '' }}</span></h1>
+  <h1>{{ cam.name }} <span class="muted">{{ cam.house_name or '' }}</span>
+    <span class="status"><span class="dot {{ 'ok' if cam.online == 1 else ('bad' if cam.online == 0 else 'unk') }}"></span>{% if cam.online == 1 %}online{% elif cam.online == 0 %}offline since {{ cam.online_since|ago }}{% else %}checking{% endif %}</span></h1>
 </div>
-<div class="player" id="player" data-rotate="{{ cam.rotate }}" data-fh="{{ cam.flip_h }}" data-fv="{{ cam.flip_v }}" data-cam="{{ cam.id }}">
-  <div class="stage"><video-stream id="video" mode="mse,hls,mp4,mjpeg" background="true"></video-stream>
+
+<div class="camWrap">
+<div class="player" id="player">
+  <div class="stage" id="stage">
+    <video-stream id="live" mode="mse,hls,mp4,mjpeg" background="true"></video-stream>
+    <video id="clip" playsinline muted hidden></video>
     <img class="poster" src="/stream/{{ cam.id }}/thumb.jpg?t={{ cam.thumb_at|int }}" alt="">
-    <div class="spinner" id="spinner">Connecting to camera… <span class="muted">(takes a few seconds)</span></div>
+    <div class="spinner" id="hint">Connecting to camera…</div>
   </div>
   <div class="controls">
-    <button type="button" data-act="rotate" title="Rotate 90°">⟳ Rotate</button>
-    <button type="button" data-act="flip_h" title="Mirror left-right">↔ Mirror</button>
-    <button type="button" data-act="flip_v" title="Flip top-bottom">↕ Flip</button>
-    <button type="button" data-act="snap" title="Save a still">📷 Still</button>
+    <button type="button" class="pill live" id="modeBtn" title="Back to live"><i></i><span id="modeTxt">LIVE</span></button>
+    <span class="small" id="label"></span>
+    <select id="speed" class="speed" title="Playback speed" hidden><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
+    <span class="grow"></span>
+    <button type="button" data-act="rotate" title="Rotate 90°">⟳</button>
+    <button type="button" data-act="flip_h" title="Mirror">↔</button>
+    <button type="button" data-act="flip_v" title="Flip">↕</button>
+    <button type="button" data-act="snap" title="Save a still">📷</button>
     <button type="button" data-act="full" title="Fullscreen">⛶</button>
-    <a class="btn" href="/cam/{{ cam.id }}/recordings">🎞 Recordings</a>
-    {% if me.is_admin %}<span class="muted small" id="saved"></span>{% endif %}
   </div>
 </div>
-<div class="row2">
-  <div class="card">
-    <h3>Status</h3>
-    <p><span class="dot {{ 'ok' if cam.online == 1 else ('bad' if cam.online == 0 else 'unk') }}"></span>
-      {% if cam.online == 1 %}Online{% elif cam.online == 0 %}Offline since {{ cam.online_since|ago }}{% else %}Not checked yet{% endif %}
-      <span class="muted">· last check {{ cam.last_check|ago }}</span></p>
-    {% if cam.last_error and cam.online == 0 %}<p class="muted small">{{ cam.last_error }}</p>{% endif %}
-    <p class="muted small">{{ cam.model }}</p>
-    {% if me.is_admin %}<form method="post" action="/admin/check/{{ cam.id }}"><button class="secondary small">Check now</button></form>{% endif %}
+
+<div class="card tl" id="tl">
+  <div class="dayNav">
+    <button type="button" class="nav" id="dayPrev" title="Earlier day">‹</button>
+    <button type="button" class="dayBtn" id="dayBtn" title="Pick a day"><b id="dayTitle"></b> <span class="muted small" id="daySub"></span> <span class="caret">📅</span></button>
+    <button type="button" class="nav" id="dayNext" title="Later day">›</button>
   </div>
-  <div class="card">
-    <h3>Recent events</h3>
-    {% if not events %}<p class="muted">Nothing yet.</p>{% endif %}
-    <ul class="events">{% for e in events %}<li><b>{{ e.kind }}</b> <span class="muted">{{ e.at|dt }}</span></li>{% endfor %}</ul>
+  <div class="modal" id="calModal" hidden>
+    <div class="modalBox">
+      <div class="calHead"><button type="button" class="nav" id="prevM">‹</button><b id="monthTitle"></b><button type="button" class="nav" id="nextM">›</button></div>
+      <div class="calGrid" id="calGrid"></div>
+      <div class="muted tiny" style="margin-top:8px">Highlighted days have footage on the card.</div>
+      <button type="button" class="secondary small" id="calClose" style="margin-top:12px;width:100%">Close</button>
+    </div>
   </div>
+  <div class="tlTime"><span id="tlTime"></span><span class="grow"></span>
+    <button type="button" class="tool" id="zoomReset" hidden title="Show the whole day">⟲ <span>Whole day</span></button>
+    <button type="button" class="tool" id="cutBtn" title="Download a section">✂ <span>Section</span></button></div>
+  <div class="track" id="track24"><div class="segs"></div><div class="sel"></div><div class="ticks"></div><div class="marks"></div><div class="now"></div><div class="head"></div></div>
+  <div class="cutPanel" id="cutPanel" hidden>
+    <span class="small"><b>Download a section.</b> Drag across the bar, or scrub and use the buttons.</span>
+    <div class="cutRow">
+      <button type="button" class="secondary small" id="cutStart">Start here</button><span id="cutStartT" class="small">–</span>
+      <button type="button" class="secondary small" id="cutEnd">End here</button><span id="cutEndT" class="small">–</span>
+      <a class="btn primary" id="cutGo" href="#" hidden>Download selection</a>
+      <button type="button" class="link small" id="cutCancel">Cancel</button>
+      <span class="small muted" id="cutNote"></span>
+    </div>
+  </div>
+  <div class="small tlStatus" id="status"></div>
+  <div class="muted tiny tlHelp">Drag to scrub · pinch or scroll on the bar to zoom · drag to the right edge for live.</div>
+  <div class="legend" id="legend"></div>
+  <details class="evWrap" id="evWrap"><summary class="small"><span id="evTitle">Detections</span></summary><ul class="events evList" id="evList"></ul></details>
+  {% if sd %}<div class="muted tiny cardInfo">Card: {{ sd.video_total_space if sd.total_space == '0B' else sd.total_space }}, {{ sd.free_space }} free{% if sd.loop_record_status == '1' %}, oldest footage is overwritten as it fills{% endif %}. Footage comes straight from the card, so playback takes a few seconds to start.</div>{% endif %}
 </div>
+
+</div>
+<script id="data" type="application/json">{{ data|safe }}</script>
 <script type="module" src="/static/video-stream.js"></script>
-<script type="module" src="/static/player.js"></script>
+<script type="module" src="/static/cam.js"></script>
 {% endblock %}

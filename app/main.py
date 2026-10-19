@@ -279,13 +279,23 @@ def home(request: Request):
 
 
 @app.get("/cam/{cam_id}", response_class=HTMLResponse)
-def cam_page(request: Request, cam_id: int):
+async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     me = require(request)
     if not db.can_view(me, cam_id):
         raise HTTPException(404, "No such camera")
     cam = db.one("SELECT c.*, h.name AS house_name FROM cameras c LEFT JOIN houses h ON h.id=c.house_id WHERE c.id=?", cam_id)
-    events = db.q("SELECT * FROM events WHERE camera_id=? ORDER BY at DESC LIMIT 20", cam_id)
-    return render(request, "cam.html", cam=cam, events=events, me=me)
+    if not (date.isdigit() and len(date) == 8):
+        date = datetime.now(TZ).strftime("%Y%m%d")
+    day_start, day_end = _day_bounds(date)
+    sd = None
+    try:
+        sd = await asyncio.get_event_loop().run_in_executor(None, tapo.sd_status, cloud, cam["device_id"])
+    except Exception as e:
+        log.info("sd status cam%s: %s", cam_id, e)
+    data = {"camId": cam_id, "name": cam["name"], "date": date, "dayStart": day_start, "dayEnd": day_end, "at": int(at) if at.isdigit() else 0,
+            "maxClip": MAX_CLIP_SECONDS, "maxDownload": MAX_DOWNLOAD_SECONDS, "rotate": cam["rotate"], "flipH": cam["flip_h"], "flipV": cam["flip_v"],
+            "isAdmin": bool(me["is_admin"]), "tz": str(TZ)}
+    return render(request, "cam.html", cam=cam, sd=sd, me=me, data=json.dumps(data))
 
 
 @app.get("/events", response_class=HTMLResponse)
@@ -430,6 +440,7 @@ def internal_relay(request: Request, device_id: str):
 
 # ------------------------------------------------------------------ recordings (SD card)
 MAX_CLIP_SECONDS = int(os.environ.get("MAX_CLIP_SECONDS", "900"))
+MAX_DOWNLOAD_SECONDS = int(os.environ.get("MAX_DOWNLOAD_SECONDS", "10800"))
 _playback_locks = {}
 
 
@@ -451,30 +462,10 @@ def _month_dates(cam, ym):
                                 end=(nxt - __import__("datetime").timedelta(days=1)).strftime("%Y%m%d"))
 
 
-@app.get("/cam/{cam_id}/recordings", response_class=HTMLResponse)
-async def recordings_page(request: Request, cam_id: int, date: str = "", at: str = ""):
-    me = require(request)
-    if not db.can_view(me, cam_id):
-        raise HTTPException(404, "No such camera")
-    cam = db.one("SELECT c.*, h.name AS house_name FROM cameras c LEFT JOIN houses h ON h.id=c.house_id WHERE c.id=?", cam_id)
-    loop = asyncio.get_event_loop()
-    err = None; clips = []; sd = None; dates = []
-    if not date:
-        date = datetime.now(TZ).strftime("%Y%m%d")
-    try:
-        dates, sd = await loop.run_in_executor(None, lambda: (_month_dates(cam, date[:6]), tapo.sd_status(cloud, cam["device_id"])))
-        if date not in dates and dates and not at:
-            date = max(dates)
-        clips = await loop.run_in_executor(None, tapo.recordings_of_day, cloud, cam["device_id"], date)
-    except Exception as e:
-        err = str(e)[:200]
-    day_start, day_end = _day_bounds(date)
-    at_t = int(at) if at.isdigit() else 0
-    return render(request, "recordings.html", cam=cam, date=date, dates=dates, clips=clips, sd=sd, err=err, me=me,
-                  max_clip=MAX_CLIP_SECONDS, day_start=day_start, day_end=day_end, at=at_t,
-                  data=json.dumps({"camId": cam_id, "date": date, "dates": dates, "clips": clips, "dayStart": day_start,
-                                   "dayEnd": day_end, "maxClip": MAX_CLIP_SECONDS, "at": at_t, "rotate": cam["rotate"],
-                                   "flipH": cam["flip_h"], "flipV": cam["flip_v"]}))
+@app.get("/cam/{cam_id}/recordings")
+def recordings_redirect(cam_id: int, date: str = "", at: str = ""):
+    q = "&".join(x for x in [f"date={date}" if date else "", f"at={at}" if at else ""] if x)
+    return RedirectResponse(f"/cam/{cam_id}" + ("?" + q if q else ""), status_code=302)
 
 
 @app.get("/cam/{cam_id}/recordings.json")
@@ -489,7 +480,11 @@ async def recordings_json(request: Request, cam_id: int, date: str = "", month: 
             return {"dates": await loop.run_in_executor(None, _month_dates, cam, month)}
         clips = await loop.run_in_executor(None, tapo.recordings_of_day, cloud, cam["device_id"], date)
         ds, de = _day_bounds(date)
-        return {"date": date, "clips": clips, "dayStart": ds, "dayEnd": de}
+        try:
+            events = await loop.run_in_executor(None, tapo.detections_of_day, cloud, cam["device_id"], ds, de)
+        except Exception as e:
+            log.info("detections cam%s: %s", cam_id, e); events = []
+        return {"date": date, "clips": clips, "events": events, "dayStart": ds, "dayEnd": de}
     except Exception as e:
         raise HTTPException(503, str(e)[:200])
 
@@ -503,7 +498,7 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
         raise HTTPException(404)
     if end <= start:
         raise HTTPException(400, "end must be after start")
-    end = min(end, start + MAX_CLIP_SECONDS)
+    end = min(end, start + (MAX_DOWNLOAD_SECONDS if download else MAX_CLIP_SECONDS))
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
     lock = _plock(cam_id)
     if not lock.acquire(blocking=False):

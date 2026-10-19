@@ -414,6 +414,59 @@ def recordings_of_day(cloud, device_id, date):
     return [{"start": int(c["startTime"]), "end": int(c["endTime"]), "type": c.get("vedio_type")} for c in clips]
 
 
+# Detection kinds, from the app's playback event table. alarm_type carries the main
+# kind; the "events_1" bitmask has bit (kind-1) set for every kind in the detection
+# (e.g. 66048 = bits 9 and 16 = ring + missed doorbell ring).
+ALARM_TYPES = {1: "scheduled", 2: "motion", 3: "tamper", 4: "line crossing", 5: "intrusion", 6: "person", 7: "baby cry",
+               8: "vehicle", 9: "pet", 10: "ring", 11: "bark", 12: "meow", 13: "glass break", 14: "smoke alarm",
+               15: "package delivered", 16: "package picked up", 17: "missed doorbell ring", 18: "doorbell ring answered",
+               19: "anti-theft", 20: "sound", 21: "manual recording", 22: "person"}
+EVENT_BITS = {1 << (k - 1): v for k, v in ALARM_TYPES.items()}
+
+
+def describe_detection(d):
+    """Human labels for one detection-list entry."""
+    labels = []
+    bits = 0
+    for k, v in d.items():
+        if k.startswith("events_"):
+            try: bits |= int(v)
+            except Exception: pass
+    for bit, name in EVENT_BITS.items():
+        if bits & bit:
+            labels.append(name)
+    at = ALARM_TYPES.get(d.get("alarm_type"))
+    if at and at not in labels:
+        labels.append(at)
+    return labels or ["motion"], bits
+
+
+def detections_of_day(cloud, device_id, day_start, day_end):
+    """Detections (motion / person / ring ...) between two epoch times, newest last."""
+    uid = user_id(cloud, device_id)
+    out = []; idx = 0
+    while True:
+        r = device_call(cloud, device_id, [{"method": "searchDetectionList", "params": {"playback": {"search_detection_list": {
+            "channel": 0, "start_time": int(day_start), "end_time": int(day_end), "start_index": idx, "end_index": idx + 199, "id": uid}}}}])
+        res = r[0] if r else {}
+        if res.get("error_code"):
+            if res["error_code"] == -71114:   # no card / not supported
+                return []
+            raise RuntimeError(f"searchDetectionList error {res['error_code']}")
+        pb = res.get("result", {}).get("playback", {})
+        items = pb.get("search_detection_list", [])
+        for d in items:
+            labels, bits = describe_detection(d)
+            out.append({"start": int(d["start_time"]), "end": int(d.get("end_time", d["start_time"])), "labels": labels,
+                        "alarm_type": d.get("alarm_type"), "bits": bits})
+        total = int(pb.get("total_num", len(out)))
+        idx += len(items)
+        if not items or idx >= total:
+            break
+    out.sort(key=lambda e: e["start"])
+    return out
+
+
 def sd_status(cloud, device_id):
     r = device_call(cloud, device_id, [{"method": "getSdCardStatus", "params": {"harddisk_manage": {"table": "hd_info"}}}])
     info = _unwrap_list(r[0].get("result", {}).get("harddisk_manage", {}).get("hd_info")) if r else []
