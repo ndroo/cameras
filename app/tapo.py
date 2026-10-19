@@ -121,6 +121,7 @@ class MqttSession:
         self.last_error = None
         self.relay_fails = 0           # consecutive relay requests with no reply
         self._reset_wanted = False
+        self._reset_reason = ""
 
     # ---------------------------------------------------------------- lifecycle
     def start(self):
@@ -143,7 +144,7 @@ class MqttSession:
                     time.sleep(1)
                 if self._reset_wanted:
                     self._reset_wanted = False
-                    log.warning("mqtt: relay requests keep failing, logging in again and reconnecting")
+                    log.warning("mqtt: %s, logging in again and reconnecting", self._reset_reason)
                     try:
                         self.cloud.login(force=True)
                     except Exception as e:
@@ -199,6 +200,12 @@ class MqttSession:
                   json.dumps({"appType": APP, "terminalUUID": self.cloud.term, "token": f"ut|{self.cloud.login()}"}), qos=1)
         log.info("mqtt connected to %s", host)
 
+    def reconnect(self, reason):
+        """Fresh login + new MQTT session. The session only covers the devices bound to the
+        account when it logged in, so a newly added camera gets no relay replies until this runs."""
+        self._reset_reason = reason
+        self._reset_wanted = True
+
     def subscribe(self, topic):
         self._subs.add(topic)
         if self._c and self._connected.is_set():
@@ -253,7 +260,7 @@ class MqttSession:
                 self.relay_fails += 1
                 if self.relay_fails >= 3:
                     self.relay_fails = 0
-                    self._reset_wanted = True
+                    self.reconnect("relay requests keep failing")
                 raise RuntimeError("no relay reply (device offline?)")
             self.relay_fails = 0
             rep = p["reply"] or {}

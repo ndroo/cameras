@@ -1073,6 +1073,8 @@ async def admin_import(request: Request):
             db.run("INSERT INTO cameras(device_id,name,model,device_type,enabled) VALUES(?,?,?,?,1)",
                    d["deviceId"], alias, d.get("deviceModel"), d.get("deviceType"))
             n += 1
+    if n and mq:
+        mq.reconnect(f"{n} new camera(s) imported")
     await register_all_streams()
     subscribe_device_topics()
     return RedirectResponse(f"/admin?msg=Imported+{n}+new+camera(s)", status_code=303)
