@@ -71,6 +71,8 @@ def fmt_dt(ts):
     return datetime.fromtimestamp(ts, TZ).strftime("%a %b %-d, %-I:%M %p") if ts else ""
 
 
+STATIC_V = str(int(time.time()))          # changes on every start, so browsers refetch scripts after a deploy
+tpl.env.globals["v"] = STATIC_V
 tpl.env.filters["ago"] = fmt_ago
 tpl.env.filters["dt"] = fmt_dt
 

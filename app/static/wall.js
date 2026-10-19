@@ -80,7 +80,7 @@ function drawWall() {
     // belt and braces: some modes never fire "playing" on the inner element
     const poll = setInterval(() => { const vv = vs.video; if (vv && vv.readyState >= 3 && !vv.paused && vv.currentTime > 0) { shown(); } if (!tiles.has(c.id)) clearInterval(poll); }, 500);
     vs.src = `/stream/${c.id}/ws`;
-    tiles.set(c.id, { el, vs, lay }); lay();
+    tiles.set(c.id, { el, vs, lay }); lay(); enableDrag(el);
     new ResizeObserver(lay).observe(stage);
   }
 }
@@ -98,12 +98,15 @@ function flip(before) {
 }
 function enableDrag(el) {
   let start = null, lifted = false, ph = null, off = null;
+  // links and images start a native drag in the browser, which cancels our pointer events
+  el.draggable = false; el.addEventListener("dragstart", ev => ev.preventDefault());
+  el.querySelectorAll("img").forEach(i => { i.draggable = false; });
   el.addEventListener("click", ev => { if (el.dataset.dragged) { ev.preventDefault(); delete el.dataset.dragged; } });
   el.addEventListener("pointerdown", ev => {
     if (ev.button !== 0) return;
     const onGrip = !!ev.target.closest(".grip");
     if (ev.pointerType !== "mouse" && !onGrip) return;
-    start = { x: ev.clientX, y: ev.clientY, id: ev.pointerId }; el.setPointerCapture(ev.pointerId); if (onGrip) ev.preventDefault();
+    start = { x: ev.clientX, y: ev.clientY, id: ev.pointerId }; try { el.setPointerCapture(ev.pointerId); } catch {} if (onGrip) ev.preventDefault();
   });
   el.addEventListener("pointermove", ev => {
     if (!start || ev.pointerId !== start.id) return;
@@ -129,7 +132,9 @@ function enableDrag(el) {
     el.style.transition = "transform .18s ease"; el.style.transform = `translate(${r.left - parseFloat(el.style.left)}px, ${r.top - parseFloat(el.style.top)}px) scale(1)`;
     const settle = () => { el.classList.remove("lifted"); el.style.cssText = ""; wall.insertBefore(el, ph); ph.remove(); ph = null; for (const t of tiles.values()) t.lay();
       const ids = [...wall.querySelectorAll(".wallTile:not(.ph)")].map(x => +x.dataset.id); order = [...ids, ...order.filter(id => !ids.includes(id))]; save(); };
-    if (Math.abs(r.left - cur.left) + Math.abs(r.top - cur.top) < 2) settle(); else el.addEventListener("transitionend", settle, { once: true });
+    let done = false; const once = () => { if (!done) { done = true; settle(); } };
+    if (Math.abs(r.left - cur.left) + Math.abs(r.top - cur.top) < 2) once();
+    else { el.addEventListener("transitionend", ev => { if (ev.target === el) once(); }, { once: true }); setTimeout(once, 220); }
   };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
 }

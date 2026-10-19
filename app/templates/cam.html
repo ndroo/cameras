@@ -63,6 +63,6 @@
 
 </div>
 <script id="data" type="application/json">{{ data|safe }}</script>
-<script type="module" src="/static/video-stream.js"></script>
-<script type="module" src="/static/cam.js"></script>
+<script type="module" src="/static/video-stream.js?v={{ v }}"></script>
+<script type="module" src="/static/cam.js?v={{ v }}"></script>
 {% endblock %}
