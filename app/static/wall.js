@@ -67,6 +67,10 @@ function drawWall() {
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
     stage.prepend(vs); wall.appendChild(el);
     const poster = stage.querySelector(".poster"), hint = stage.querySelector(".spinner");
+    const amb = document.createElement("canvas"); amb.className = "amb"; amb.width = 48; amb.height = 27; stage.prepend(amb);
+    const actx = amb.getContext("2d", { alpha: false }); let lastAmb = 0;
+    const paintAmb = now => { const vv = vs.video; if (vv && vv.readyState >= 2 && now - lastAmb > 250) { lastAmb = now; try { actx.drawImage(vv, 0, 0, amb.width, amb.height); amb.style.opacity = "1"; } catch {} } if (tiles.has(c.id)) requestAnimationFrame(paintAmb); };
+    requestAnimationFrame(paintAmb);
     const lay = () => { for (const x of [vs, poster]) applyToBox(stage, x, c.rotate, c.flipH, c.flipV); };
     const shown = () => { poster.style.opacity = "0"; hint.style.display = "none"; };
     const v = vs.video;
@@ -85,28 +89,48 @@ $("#fullBtn").addEventListener("click", () => { (wall.requestFullscreen || wall.
 window.addEventListener("resize", () => { if (!cols) drawWall(); });
 drawPick(); drawWall();
 
-// ---------------------------------------------------------------- drag to rearrange (mouse and touch)
+// ---------------------------------------------------------------- drag to rearrange: the live tile itself moves
+const rectsOf = () => { const m = new Map(); for (const x of wall.querySelectorAll(".wallTile:not(.ph)")) m.set(x, x.getBoundingClientRect()); return m; };
+function flip(before) {
+  for (const [x, b] of before) { if (x.classList.contains("lifted")) continue; const a = x.getBoundingClientRect(); const dx = b.left - a.left, dy = b.top - a.top;
+    if (!dx && !dy) continue; x.style.transition = "none"; x.style.transform = `translate(${dx}px,${dy}px)`; x.getBoundingClientRect();
+    x.style.transition = "transform .18s ease"; x.style.transform = ""; x.addEventListener("transitionend", () => { x.style.transition = ""; }, { once: true }); }
+}
 function enableDrag(el) {
-  let start = null, ghost = null, dragging = false;
+  let start = null, lifted = false, ph = null, off = null;
   el.addEventListener("click", ev => { if (el.dataset.dragged) { ev.preventDefault(); delete el.dataset.dragged; } });
   el.addEventListener("pointerdown", ev => {
     if (ev.button !== 0) return;
     const onGrip = !!ev.target.closest(".grip");
-    if (ev.pointerType !== "mouse" && !onGrip) return;           // on touch only the grip starts a drag, so the page can still scroll
+    if (ev.pointerType !== "mouse" && !onGrip) return;
     start = { x: ev.clientX, y: ev.clientY, id: ev.pointerId }; el.setPointerCapture(ev.pointerId); if (onGrip) ev.preventDefault();
   });
   el.addEventListener("pointermove", ev => {
     if (!start || ev.pointerId !== start.id) return;
-    if (!dragging) { if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) return; dragging = true; el.dataset.dragged = "1";
-      ghost = el.cloneNode(true); ghost.className = "wallTile ghost"; ghost.querySelectorAll("video-stream").forEach(x => x.remove());
-      const r = el.getBoundingClientRect(); ghost.style.width = r.width + "px"; ghost.style.height = r.height + "px"; document.body.appendChild(ghost); el.classList.add("dragSrc"); }
-    ghost.style.transform = `translate(${ev.clientX - ghost.offsetWidth / 2}px, ${ev.clientY - ghost.offsetHeight / 2}px)`;
-    const over = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("wallTile") && x !== el && x !== ghost);
-    if (over) { const r = over.getBoundingClientRect(); const before = (ev.clientX - r.left) / r.width < 0.5; wall.insertBefore(el, before ? over : over.nextSibling); for (const t of tiles.values()) t.lay(); }
+    if (!lifted) {
+      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) return;
+      lifted = true; el.dataset.dragged = "1";
+      const r = el.getBoundingClientRect(); off = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+      ph = document.createElement("div"); ph.className = "wallTile ph"; ph.style.height = r.height + "px";
+      wall.insertBefore(ph, el);
+      el.classList.add("lifted"); Object.assign(el.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", zIndex: 100, transition: "none" });
+      document.body.classList.add("dragging");
+    }
+    el.style.transform = `translate(${ev.clientX - off.x - parseFloat(el.style.left)}px, ${ev.clientY - off.y - parseFloat(el.style.top)}px) scale(1.03)`;
+    const over = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("wallTile") && x !== el && !x.classList.contains("ph"));
+    if (over) { const r = over.getBoundingClientRect(); const before = (ev.clientX - r.left) / r.width < 0.5; const target = before ? over : over.nextSibling;
+      if (target !== ph && !(target === null && ph === wall.lastElementChild)) { const b = rectsOf(); wall.insertBefore(ph, target); flip(b); } }
   });
-  const end = ev => { if (!start || ev.pointerId !== start.id) return; start = null;
-    if (dragging) { dragging = false; ghost.remove(); ghost = null; el.classList.remove("dragSrc");
-      const ids = [...wall.querySelectorAll(".wallTile")].map(x => +x.dataset.id); order = [...ids, ...order.filter(id => !ids.includes(id))]; save(); } };
+  const end = ev => {
+    if (!start || ev.pointerId !== start.id) return; start = null;
+    if (!lifted) return; lifted = false; document.body.classList.remove("dragging");
+    const r = ph.getBoundingClientRect(), cur = el.getBoundingClientRect();
+    // glide into the slot, then snap back into the grid flow
+    el.style.transition = "transform .18s ease"; el.style.transform = `translate(${r.left - parseFloat(el.style.left)}px, ${r.top - parseFloat(el.style.top)}px) scale(1)`;
+    const settle = () => { el.classList.remove("lifted"); el.style.cssText = ""; wall.insertBefore(el, ph); ph.remove(); ph = null; for (const t of tiles.values()) t.lay();
+      const ids = [...wall.querySelectorAll(".wallTile:not(.ph)")].map(x => +x.dataset.id); order = [...ids, ...order.filter(id => !ids.includes(id))]; save(); };
+    if (Math.abs(r.left - cur.left) + Math.abs(r.top - cur.top) < 2) settle(); else el.addEventListener("transitionend", settle, { once: true });
+  };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
 }
 document.addEventListener("fullscreenchange", () => { drawWall(); setTimeout(() => { for (const t of tiles.values()) t.lay(); }, 50); });
