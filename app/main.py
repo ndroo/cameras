@@ -793,6 +793,10 @@ HEATING_PAGES = {"": "index.html", "index.html": "index.html", "legend.html": "l
 
 
 @app.get("/heating")
+def heating_root():
+    return RedirectResponse("/heating/", status_code=301)   # relative links in the dashboard need the slash
+
+
 @app.get("/heating/")
 @app.get("/heating/{page}")
 def heating_page(page: str = ""):
