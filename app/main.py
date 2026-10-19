@@ -7,7 +7,7 @@ and grants its members some or all of that house's cameras plus the text alerts 
 has turned on (doorbell, tamper, offline/online).  Live video comes through the Tapo
 cloud relay into go2rtc (one exec pipe per camera) and is proxied to the browser.
 """
-import asyncio, json, logging, os, random, secrets, subprocess, tempfile, threading, time, uuid
+import asyncio, json, logging, os, random, secrets, subprocess, sys, tempfile, threading, time, uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -724,6 +724,112 @@ def admin_check(request: Request, cam_id: int):
     return RedirectResponse(f"/cam/{cam_id}", status_code=303)
 
 
+# ------------------------------------------------------------------ heating monitor (boiler, zone panel, ecobee, weather)
+HEATING_DIR = os.path.join(HERE, "..", "heating")
+HEATING_OUT = os.path.join(DATA_DIR, "heating", "stills")
+HEATING_EVERY = int(os.environ.get("HEATING_EVERY", "900"))
+HEATING_MODEL = os.environ.get("HEATING_MODEL", "claude-sonnet-5-5")
+_heating_state = {"last": 0, "ok": None, "error": ""}
+
+
+def _heating_env():
+    env = dict(os.environ)
+    env.update({"HEATING_OUT": HEATING_OUT, "MONITOR_OUT": HEATING_OUT, "INTERNAL_URL": "http://127.0.0.1:8000",
+                "ECOBEE_TOKEN_FILE": os.path.join(DATA_DIR, "heating", "ecobee_token.enc"), "PYTHONUNBUFFERED": "1"})
+    return env
+
+
+def _heating_run(args, timeout=600):
+    r = subprocess.run([sys.executable] + args, cwd=HEATING_DIR, env=_heating_env(), capture_output=True, text=True, timeout=timeout)
+    for line in (r.stdout + r.stderr).strip().splitlines()[-12:]:
+        log.info("heating %s: %s", args[0], line)
+    return r.returncode == 0
+
+
+def heating_cycle():
+    os.makedirs(HEATING_OUT, exist_ok=True)
+    tok = os.path.join(DATA_DIR, "heating", "ecobee_token.enc")
+    if not os.path.exists(tok) and os.path.exists(os.path.join(HEATING_DIR, "ecobee_token.enc")):
+        import shutil; shutil.copy(os.path.join(HEATING_DIR, "ecobee_token.enc"), tok)
+    ok = True
+    for args in (["ecobee_monitor.py", "--once"], ["weather_monitor.py", "--once"],
+                 ["monitor.py", "--once", "--model", HEATING_MODEL, "--out", HEATING_OUT]):
+        try:
+            ok = _heating_run(args) and ok
+        except Exception as e:
+            ok = False; log.warning("heating %s: %s", args[0], e)
+    _heating_state.update(last=time.time(), ok=ok)
+    _prune_stills()
+    return ok
+
+
+def _prune_stills(keep_days=2):
+    """Timestamped stills pile up fast; keep two days of them (the *_latest.jpg files stay)."""
+    cutoff = time.time() - keep_days * 86400
+    try:
+        for f in os.listdir(HEATING_OUT):
+            if f.endswith(".jpg") and "_latest" not in f:
+                p = os.path.join(HEATING_OUT, f)
+                if os.path.getmtime(p) < cutoff:
+                    os.remove(p)
+    except Exception:
+        pass
+
+
+def heating_loop():
+    time.sleep(90)
+    while True:
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            try:
+                heating_cycle()
+            except Exception as e:
+                log.warning("heating cycle: %s", e)
+        else:
+            log.info("heating: ANTHROPIC_API_KEY not set, skipping")
+        time.sleep(HEATING_EVERY)
+
+
+HEATING_PAGES = {"": "index.html", "index.html": "index.html", "legend.html": "legend.html", "history.html": "history.html"}
+
+
+@app.get("/heating")
+@app.get("/heating/")
+@app.get("/heating/{page}")
+def heating_page(page: str = ""):
+    """The heating dashboard. Public on purpose: it shows mechanical equipment only."""
+    name = HEATING_PAGES.get(page)
+    if not name:
+        raise HTTPException(404)
+    return FileResponse(os.path.join(HEATING_DIR, name), media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/heating/stills/{name}")
+def heating_still(name: str):
+    if "/" in name or ".." in name or not name.endswith((".jpg", ".json", ".jsonl", ".png")):
+        raise HTTPException(404)
+    p = os.path.join(HEATING_OUT, name)
+    if not os.path.exists(p):
+        raise HTTPException(404)
+    return FileResponse(p, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/heating/docs/{name}")
+def heating_doc(name: str):
+    if "/" in name or ".." in name:
+        raise HTTPException(404)
+    p = os.path.join(HEATING_DIR, "docs", name)
+    if not os.path.exists(p):
+        raise HTTPException(404)
+    return FileResponse(p)
+
+
+@app.post("/admin/heating/run")
+def admin_heating_run(request: Request):
+    require(request, admin=True)
+    threading.Thread(target=heating_cycle, daemon=True).start()
+    return RedirectResponse("/admin?msg=Heating+cycle+started", status_code=303)
+
+
 # ------------------------------------------------------------------ admin
 @app.get("/admin", response_class=HTMLResponse)
 def admin(request: Request, msg: str = ""):
@@ -885,6 +991,7 @@ async def startup():
         mq.start()
         threading.Thread(target=health_loop, name="health", daemon=True).start()
         threading.Thread(target=detection_loop, name="detections", daemon=True).start()
+        threading.Thread(target=heating_loop, name="heating", daemon=True).start()
     else:
         log.warning("TPLINK_EMAIL not set: streams and health checks disabled")
     asyncio.create_task(_register_later())
