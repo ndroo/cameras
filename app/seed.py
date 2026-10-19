@@ -25,7 +25,11 @@ def main():
     if admin and admin_email and not admin["email"]:
         db.run("UPDATE people SET email=? WHERE id=?", admin_email, admin["id"])
 
-    cloud = tapo.TapoCloud(os.environ["TPLINK_EMAIL"], os.environ["TPLINK_PASSWORD"], os.environ.get("TPLINK_TERMINAL_UUID"))
+    # share the running app's cached token: a fresh login from the same terminal UUID can
+    # invalidate the token the app's MQTT session is using
+    data_dir = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
+    cloud = tapo.TapoCloud(os.environ["TPLINK_EMAIL"], os.environ["TPLINK_PASSWORD"], os.environ.get("TPLINK_TERMINAL_UUID"),
+                           cache_path=os.path.join(data_dir, "tapo_token.json"))
     n = 0
     for d in cloud.device_list():
         if d.get("deviceType") not in ("SMART.IPCAMERA", "SMART.TAPODOORBELL"):

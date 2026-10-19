@@ -115,6 +115,8 @@ class MqttSession:
         self._subs = set()
         self._stop = False
         self.last_error = None
+        self.relay_fails = 0           # consecutive relay requests with no reply
+        self._reset_wanted = False
 
     # ---------------------------------------------------------------- lifecycle
     def start(self):
@@ -133,8 +135,19 @@ class MqttSession:
             try:
                 self._connect_once()
                 backoff = 5
-                while not self._stop and self._connected.is_set():
+                while not self._stop and self._connected.is_set() and not self._reset_wanted:
                     time.sleep(1)
+                if self._reset_wanted:
+                    self._reset_wanted = False
+                    log.warning("mqtt: relay requests keep failing, logging in again and reconnecting")
+                    try:
+                        self.cloud.login(force=True)
+                    except Exception as e:
+                        log.warning("re-login failed: %s", e)
+                    try:
+                        self._c.disconnect()
+                    except Exception:
+                        pass
             except Exception as e:
                 self.last_error = str(e)
                 log.warning("mqtt: %s (retry in %ss)", e, backoff)
@@ -233,7 +246,12 @@ class MqttSession:
                      "clientId": self.cloud.term, "caType": "cloud-self", "protocolVersion": 2}
             self._c.publish(f"$tpiot/things/{device_id}/relay/request/get", json.dumps(param), qos=1)
             if not p["ev"].wait(timeout):
+                self.relay_fails += 1
+                if self.relay_fails >= 3:
+                    self.relay_fails = 0
+                    self._reset_wanted = True
                 raise RuntimeError("no relay reply (device offline?)")
+            self.relay_fails = 0
             rep = p["reply"] or {}
             res = (rep.get("relayRespJson") or rep).get("result") or {}
             if not res.get("relayUrl"):
