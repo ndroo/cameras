@@ -61,7 +61,7 @@ function drawWall() {
     if (tiles.has(c.id)) continue;
     const el = document.createElement("a"); el.className = "wallTile"; el.href = `/cam/${c.id}`;
     el.dataset.id = c.id;
-    el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner">Connecting…</div>
+    el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner"><i class="spin"></i>Connecting…</div>
       <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}</span><i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
     const sideways = c.rotate === 90 || c.rotate === 270; if (sideways) el.classList.add("sideways");
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
@@ -76,7 +76,7 @@ function drawWall() {
     const v = vs.video;
     if (v) { v.muted = true; v.controls = false; v.setAttribute("playsinline", "");
       v.addEventListener("playing", shown); v.addEventListener("timeupdate", () => { if (v.currentTime > 0) shown(); });
-      v.addEventListener("waiting", () => { hint.style.display = ""; hint.textContent = "Reconnecting…"; }); }
+      v.addEventListener("waiting", () => { hint.style.display = ""; hint.innerHTML = '<i class="spin"></i>Reconnecting…'; }); }
     // belt and braces: some modes never fire "playing" on the inner element
     const poll = setInterval(() => { const vv = vs.video; if (vv && vv.readyState >= 3 && !vv.paused && vv.currentTime > 0) { shown(); } if (!tiles.has(c.id)) clearInterval(poll); }, 500);
     vs.src = `/stream/${c.id}/ws`;

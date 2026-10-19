@@ -10,7 +10,7 @@
     {% for c in h.cams %}
     <a class="tile" href="/cam/{{ c.id }}">
       <div class="thumb" data-rotate="{{ c.rotate }}" data-fh="{{ c.flip_h }}" data-fv="{{ c.flip_v }}">
-        <img src="/stream/{{ c.id }}/thumb.jpg?t={{ c.thumb_at|int }}" alt="" loading="lazy">
+        <img src="/stream/{{ c.id }}/thumb.jpg?t={{ c.thumb_at|int }}" alt="" loading="lazy" onload="this.classList.add('in')">
       </div>
       <div class="tileBody">
         <span class="name">{{ c.name }}</span>

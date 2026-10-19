@@ -8,11 +8,11 @@
     <input type="hidden" name="next" value="{{ next }}">
     <label>Mobile number or email</label>
     <input name="ident" type="text" inputmode="email" autocomplete="username" placeholder="416 555 0123 or you@example.com" value="{{ ident }}" autofocus required>
-    <button type="submit">Send me a code</button>
+    <button type="submit" data-busy="Sending…">Send me a code</button>
     <details class="alt"><summary class="muted small">Have a passcode?</summary>
       <label>Passcode</label>
       <input name="passcode" type="password" autocomplete="current-password">
-      <button type="submit" class="secondary">Sign in with passcode</button>
+      <button type="submit" class="secondary" data-busy="Signing in…">Sign in with passcode</button>
     </details>
   </form>
 </div>

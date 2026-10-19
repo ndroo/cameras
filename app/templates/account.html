@@ -9,7 +9,7 @@
   <form method="post" action="/account/passcode">
     <label>New passcode (6+ characters)</label><input name="passcode" type="password" autocomplete="new-password" minlength="6">
     <label>Again</label><input name="passcode2" type="password" autocomplete="new-password" minlength="6">
-    <button type="submit">Save passcode</button>
+    <button type="submit" data-busy="Saving…">Save passcode</button>
     {% if me.passcode_hash %}<button type="submit" name="clear" value="1" class="secondary">Remove passcode</button>{% endif %}
   </form>
   <h3 style="margin-top:22px">Devices</h3>

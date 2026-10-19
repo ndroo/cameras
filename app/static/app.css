@@ -237,3 +237,18 @@ body.dragging{user-select:none;cursor:grabbing}body.dragging .wallTile:not(.lift
 
 /* timeline: square ends so footage reaches the edge cleanly */
 .track{border-radius:4px;overflow:hidden}.track .segs{border-radius:0}.track .future{border-radius:0}
+
+/* loading feedback */
+.pbar{position:fixed;top:0;left:0;height:3px;width:0;background:var(--acc);z-index:1000;opacity:0;transition:opacity .2s}
+.pbar.on{opacity:1;animation:pbar 12s cubic-bezier(.1,.6,.2,1) forwards}
+@keyframes pbar{0%{width:0}10%{width:35%}40%{width:70%}100%{width:92%}}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:8px}
+.tlLoading .spin,.calGrid .spin{border-color:var(--line);border-top-color:var(--acc)}
+@keyframes spin{to{transform:rotate(360deg)}}
+button.busy{opacity:.7;cursor:progress}
+.tlLoading{display:flex;align-items:center;gap:4px;font-size:13px;color:var(--muted);margin:-8px 0 8px}
+.tl.loading .track{opacity:.55}.tl.loading .track::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.12),transparent);animation:shimmer 1.2s linear infinite}
+@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.calGrid.loading{opacity:.4;pointer-events:none}
+.thumb img{opacity:0;transition:opacity .3s}.thumb img.in{opacity:1}
+@media (prefers-reduced-motion: reduce){.pbar.on,.spin,.tl.loading .track::after{animation:none}}

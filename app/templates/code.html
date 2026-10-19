@@ -9,12 +9,12 @@
     <input type="hidden" name="ident" value="{{ ident }}">
     <label>Code</label>
     <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" autofocus>
-    <button type="submit">Sign in</button>
+    <button type="submit" data-busy="Signing in…">Sign in</button>
     {% if has_passcode %}
     <details class="alt"><summary class="muted small">Use your passcode instead</summary>
       <label>Passcode</label>
       <input name="passcode" type="password" autocomplete="current-password">
-      <button type="submit" class="secondary">Sign in with passcode</button>
+      <button type="submit" class="secondary" data-busy="Signing in…">Sign in with passcode</button>
     </details>
     {% endif %}
   </form>

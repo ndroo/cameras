@@ -13,6 +13,7 @@
 <meta name="theme-color" content="#0f1115">
 </head>
 <body>
+<div class="pbar" id="pbar"></div>
 <header class="top">
   <span class="left">{% block back %}{% endblock %}<a href="/" class="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h13v9H3z"/><path d="M16 11l5-3v8l-5-3z"/></svg> Cameras</a></span>
   <nav>
@@ -27,5 +28,24 @@
 <main class="wrap">
 {% block body %}{% endblock %}
 </main>
+<script>
+(function(){
+  var bar = document.getElementById("pbar"), t;
+  function start(){ bar.classList.add("on"); clearTimeout(t); t = setTimeout(function(){ bar.classList.remove("on"); }, 15000); }
+  window.startLoading = start;
+  document.addEventListener("click", function(ev){
+    var a = ev.target.closest("a[href]"); if (!a || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || a.target === "_blank" || a.hasAttribute("download")) return;
+    var u = new URL(a.href, location.href); if (u.origin !== location.origin || (u.pathname === location.pathname && u.search === location.search && u.hash)) return;
+    if (a.dataset.nobar !== undefined) return;
+    start();
+  });
+  document.addEventListener("submit", function(ev){
+    var f = ev.target; if (ev.defaultPrevented) return; start();
+    var b = ev.submitter || f.querySelector("button[type=submit],button:not([type])");
+    if (b) setTimeout(function(){ b.classList.add("busy"); b.disabled = true; var l = b.dataset.busy; if (l) b.textContent = l; }, 0);
+  });
+  window.addEventListener("pageshow", function(){ bar.classList.remove("on"); document.querySelectorAll("button.busy").forEach(function(b){ b.classList.remove("busy"); b.disabled = false; }); });
+})();
+</script>
 </body>
 </html>

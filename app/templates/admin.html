@@ -4,7 +4,7 @@
 {% if msg %}<p class="notice">{{ msg }}</p>{% endif %}
 <p class="muted small">Tapo cloud link: <span class="dot {{ 'ok' if mqtt_ok else 'bad' }}"></span>{{ 'connected' if mqtt_ok else 'not connected' }}
  · <a href="/admin/mqtt-log">raw device messages</a>
- · <form method="post" action="/admin/test-sms" class="inline"><button class="link">send me a test text</button></form></p>
+ · <form method="post" action="/admin/test-sms" class="inline"><button class="link" data-busy="sending…">send me a test text</button></form></p>
 
 <section class="card">
   <h2>Houses</h2>
@@ -20,7 +20,7 @@
 
 <section class="card">
   <h2>Cameras</h2>
-  <form method="post" action="/admin/import" class="line"><button class="small">Import cameras from the Tapo account</button> <span class="muted small">finds any camera or doorbell on the account that isn't here yet</span></form>
+  <form method="post" action="/admin/import" class="line"><button class="small" data-busy="Asking Tapo…">Import cameras from the Tapo account</button> <span class="muted small">finds any camera or doorbell on the account that isn't here yet</span></form>
   <table class="tbl">
     <tr><th>Name</th><th>House</th><th>Orientation</th><th>Order</th><th>On</th><th>Status</th><th></th></tr>
     {% for c in cams %}

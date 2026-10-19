@@ -290,11 +290,7 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     if not (date.isdigit() and len(date) == 8):
         date = datetime.now(TZ).strftime("%Y%m%d")
     day_start, day_end = _day_bounds(date)
-    sd = None
-    try:
-        sd = await asyncio.get_event_loop().run_in_executor(None, tapo.sd_status, cloud, cam["device_id"])
-    except Exception as e:
-        log.info("sd status cam%s: %s", cam_id, e)
+    sd = None            # card status is fetched by the page after it renders (see recordings.json)
     data = {"camId": cam_id, "name": cam["name"], "date": date, "dayStart": day_start, "dayEnd": day_end, "at": int(at) if at.isdigit() else 0,
             "maxClip": MAX_CLIP_SECONDS, "maxDownload": MAX_DOWNLOAD_SECONDS, "rotate": cam["rotate"], "flipH": cam["flip_h"], "flipV": cam["flip_v"],
             "isAdmin": bool(me["is_admin"]), "tz": str(TZ)}
@@ -510,7 +506,13 @@ async def recordings_json(request: Request, cam_id: int, date: str = "", month: 
             events = await loop.run_in_executor(None, tapo.detections_of_day, cloud, cam["device_id"], ds, de)
         except Exception as e:
             log.info("detections cam%s: %s", cam_id, e); events = []
-        return {"date": date, "clips": clips, "events": events, "dayStart": ds, "dayEnd": de}
+        out = {"date": date, "clips": clips, "events": events, "dayStart": ds, "dayEnd": de}
+        if request.query_params.get("sd"):
+            try:
+                out["sd"] = await loop.run_in_executor(None, tapo.sd_status, cloud, cam["device_id"])
+            except Exception as e:
+                log.info("sd status cam%s: %s", cam_id, e)
+        return out
     except Exception as e:
         raise HTTPException(503, str(e)[:200])
 

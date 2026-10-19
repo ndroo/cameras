@@ -38,7 +38,7 @@ async function saveOrient() {
   if (D.isAdmin) { const fd = new FormData(); fd.set("rotate", o.rotate); fd.set("flip_h", o.flip_h); fd.set("flip_v", o.flip_v); fetch(`/cam/${D.camId}/orientation`, { method: "POST", body: fd }); }
   else { try { localStorage.setItem("orient:" + D.camId, JSON.stringify(o)); } catch {} }
 }
-function showHint(txt) { hint.textContent = txt; hint.style.display = ""; }
+function showHint(txt) { hint.innerHTML = '<i class="spin"></i>' + txt; hint.style.display = ""; }
 function hideHint() { hint.style.display = "none"; }
 
 function goLive() {
@@ -226,25 +226,29 @@ function drawEvents() {
 
 // ---------------------------------------------------------------- day + calendar
 const shift = (key, n) => { const d = new Date(+key.slice(0, 4), +key.slice(4, 6) - 1, +key.slice(6, 8) + n); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`; };
+let sdLoaded = false;
+function setBusy(on, txt) { const l = $("#tlLoading"); l.hidden = !on; if (txt) l.querySelector("span").textContent = txt; $("#tl").classList.toggle("loading", on); $("#dayPrev").disabled = on; $("#dayNext").disabled = on || S.date >= today(); }
 async function loadDay(key, at, attempt = 0) {
-  status.textContent = attempt ? `Camera busy, retrying… (${attempt})` : "Loading day…";
+  status.textContent = ""; setBusy(true, attempt ? `Camera busy, retrying… (${attempt})` : `Reading the card for ${fmtD(key)}…`);
   try {
-    const r = await fetch(`/cam/${D.camId}/recordings.json?date=${key}`);
+    const r = await fetch(`/cam/${D.camId}/recordings.json?date=${key}${sdLoaded ? "" : "&sd=1"}`);
     if (!r.ok) { const msg = (await r.json()).detail || String(r.status);
       if (/busy|71103/.test(msg) && attempt < 4) { await new Promise(res => setTimeout(res, 4000)); return loadDay(key, at, attempt + 1); }
       throw new Error(msg); }
     const j = await r.json();
     S.date = key; S.clips = j.clips; S.events = j.events || []; S.dayStart = j.dayStart; S.dayEnd = j.dayEnd; S.loaded = true; view = null; $("#zoomReset").hidden = true;
-    status.textContent = "";
+    if (j.sd) { sdLoaded = true; const sd = j.sd; const size = sd.total_space === "0B" ? sd.video_total_space : sd.total_space;
+      $("#cardInfo").textContent = `Card: ${size}, ${sd.free_space} free${sd.loop_record_status === "1" ? ", oldest footage is overwritten as it fills" : ""}. Footage comes straight from the card, so playback takes a few seconds to start.`; }
+    setBusy(false);
     if (at) play(at); else if (S.mode !== "live") { S.t = S.dayStart; draw(); }
     if (key.slice(0, 6) !== S.month) await loadMonth(key.slice(0, 6)); else drawCal();
     draw(); drawEvents();
-  } catch (e) { status.textContent = "Couldn't read the card: " + e.message; }
+  } catch (e) { setBusy(false); status.textContent = "Couldn't read the card: " + e.message; }
 }
 async function loadMonth(m) {
-  S.month = m;
+  S.month = m; $("#calGrid").classList.add("loading");
   try { const r = await fetch(`/cam/${D.camId}/recordings.json?month=${m}`); const j = await r.json(); S.dates = new Set(j.dates || []); } catch { S.dates = new Set(); }
-  drawCal();
+  $("#calGrid").classList.remove("loading"); drawCal();
 }
 function drawCal() {
   const y = +S.month.slice(0, 4), mo = +S.month.slice(4, 6);
@@ -258,7 +262,7 @@ function drawCal() {
     const b = document.createElement("button"); b.type = "button"; b.textContent = d;
     b.className = "day" + (S.dates.has(key) ? " has" : "") + (key === S.date ? " sel" : "") + (key === td ? " today" : "");
     if (key > td) b.disabled = true;
-    b.addEventListener("click", () => { $("#calModal").hidden = true; loadDay(key); });
+    b.addEventListener("click", () => { $("#calModal").hidden = true; S.date = key; draw(); loadDay(key); });
     g.appendChild(b);
   }
   $("#nextM").disabled = S.month >= td.slice(0, 6);
