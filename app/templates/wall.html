@@ -2,14 +2,22 @@
 {% block body %}
 <div class="wallHead">
   <h1>Multi-view</h1>
-  <div class="chips" id="chips"></div>
-  <div class="wallTools">
-    <label class="small muted">Columns <select id="cols" class="chip"><option value="0">auto</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
-    <button type="button" class="tool" id="fullBtn" title="Fullscreen">⛶ <span>Fullscreen</span></button>
-  </div>
+  <button type="button" class="tool" id="pickBtn">▦ <span id="pickTxt">Choose cameras</span></button>
+  <span class="grow"></span>
+  <label class="small muted sel">Columns <select id="cols"><option value="0">auto</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>
+  <button type="button" class="tool" id="fullBtn" title="Fullscreen">⛶ <span>Fullscreen</span></button>
 </div>
 <div class="wall" id="wall"></div>
-<p class="muted small" id="wallEmpty" hidden>Pick at least one camera above.</p>
+<p class="muted small" id="wallEmpty" hidden>No cameras chosen. Use "Choose cameras" above.</p>
+
+<div class="drawerBack" id="drawerBack" hidden></div>
+<aside class="drawer" id="drawer" hidden>
+  <div class="drawerHead"><b>Cameras</b><span class="muted small" id="pickCount"></span><button type="button" class="nav" id="drawerClose" title="Close">×</button></div>
+  <input type="search" id="pickSearch" placeholder="Search cameras" autocomplete="off">
+  <div class="pickList" id="pickList"></div>
+  <div class="drawerFoot"><button type="button" class="link small" id="pickNone">Clear</button><button type="button" class="small" id="drawerDone">Done</button></div>
+</aside>
+
 <script id="data" type="application/json">{{ data|safe }}</script>
 <script type="module" src="/static/video-stream.js"></script>
 <script type="module" src="/static/wall.js"></script>
