@@ -90,11 +90,27 @@ window.addEventListener("resize", () => { if (!cols) drawWall(); });
 drawPick(); drawWall();
 
 // ---------------------------------------------------------------- drag to rearrange: the live tile itself moves
-const rectsOf = () => { const m = new Map(); for (const x of wall.querySelectorAll(".wallTile:not(.ph)")) m.set(x, x.getBoundingClientRect()); return m; };
+// layout positions ignore any in-flight slide animation (offsetLeft/Top are pre-transform)
+const layoutRect = x => { const w = wall.getBoundingClientRect(); return { left: w.left + x.offsetLeft, top: w.top + x.offsetTop, width: x.offsetWidth, height: x.offsetHeight }; };
+const rectsOf = () => { const m = new Map(); for (const x of wall.querySelectorAll(".wallTile:not(.ph):not(.lifted)")) m.set(x, layoutRect(x)); return m; };
 function flip(before) {
-  for (const [x, b] of before) { if (x.classList.contains("lifted")) continue; const a = x.getBoundingClientRect(); const dx = b.left - a.left, dy = b.top - a.top;
-    if (!dx && !dy) continue; x.style.transition = "none"; x.style.transform = `translate(${dx}px,${dy}px)`; x.getBoundingClientRect();
-    x.style.transition = "transform .18s ease"; x.style.transform = ""; x.addEventListener("transitionend", () => { x.style.transition = ""; }, { once: true }); }
+  for (const [x, b] of before) { const a = layoutRect(x); const dx = b.left - a.left, dy = b.top - a.top;
+    if (!dx && !dy) continue;
+    // continue from wherever the tile visually is right now, so a mid-slide retarget doesn't jump
+    const cur = new DOMMatrixReadOnly(getComputedStyle(x).transform);
+    x.style.transition = "none"; x.style.transform = `translate(${dx + cur.m41}px,${dy + cur.m42}px)`; x.getBoundingClientRect();
+    x.style.transition = "transform .18s ease"; x.style.transform = ""; }
+}
+function slotAt(px, py, el, ph) {
+  // which tile's settled box is under the pointer, and whether we are clearly past its midpoint
+  for (const x of wall.querySelectorAll(".wallTile:not(.ph):not(.lifted)")) {
+    const r = layoutRect(x);
+    if (px < r.left || px > r.left + r.width || py < r.top || py > r.top + r.height) continue;
+    const f = (px - r.left) / r.width;
+    if (f > 0.35 && f < 0.65) return null;                       // dead zone around the midpoint: keep the current slot
+    return { over: x, before: f <= 0.35 };
+  }
+  return null;
 }
 function enableDrag(el) {
   let start = null, lifted = false, ph = null, off = null;
@@ -120,14 +136,15 @@ function enableDrag(el) {
       document.body.classList.add("dragging");
     }
     el.style.transform = `translate(${ev.clientX - off.x - parseFloat(el.style.left)}px, ${ev.clientY - off.y - parseFloat(el.style.top)}px) scale(1.03)`;
-    const over = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("wallTile") && x !== el && !x.classList.contains("ph"));
-    if (over) { const r = over.getBoundingClientRect(); const before = (ev.clientX - r.left) / r.width < 0.5; const target = before ? over : over.nextSibling;
-      if (target !== ph && !(target === null && ph === wall.lastElementChild)) { const b = rectsOf(); wall.insertBefore(ph, target); flip(b); } }
+    const hit = slotAt(ev.clientX, ev.clientY, el, ph);
+    if (hit) { let target = hit.before ? hit.over : hit.over.nextSibling; if (target === el) target = el.nextSibling;
+      const already = target === ph || (target === null && ph === wall.lastElementChild) || (target && target.previousSibling === ph);
+      if (!already) { const b = rectsOf(); wall.insertBefore(ph, target); flip(b); } }
   });
   const end = ev => {
     if (!start || ev.pointerId !== start.id) return; start = null;
     if (!lifted) return; lifted = false; document.body.classList.remove("dragging");
-    const r = ph.getBoundingClientRect(), cur = el.getBoundingClientRect();
+    const r = layoutRect(ph), cur = el.getBoundingClientRect();
     // glide into the slot, then snap back into the grid flow
     el.style.transition = "transform .18s ease"; el.style.transform = `translate(${r.left - parseFloat(el.style.left)}px, ${r.top - parseFloat(el.style.top)}px) scale(1)`;
     const settle = () => { el.classList.remove("lifted"); el.style.cssText = ""; wall.insertBefore(el, ph); ph.remove(); ph = null; for (const t of tiles.values()) t.lay();
