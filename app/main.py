@@ -479,6 +479,21 @@ def recordings_redirect(cam_id: int, date: str = "", at: str = ""):
     return RedirectResponse(f"/cam/{cam_id}" + ("?" + q if q else ""), status_code=302)
 
 
+def _clips_for_day(cam, date, day_start):
+    """The camera files a clip under the day it started, so include any clip from the
+    day before that runs past midnight."""
+    clips = tapo.recordings_of_day(cloud, cam["device_id"], date)
+    prev = (datetime.strptime(date, "%Y%m%d") - __import__("datetime").timedelta(days=1)).strftime("%Y%m%d")
+    try:
+        for c in tapo.recordings_of_day(cloud, cam["device_id"], prev):
+            if c["end"] > day_start and not any(x["start"] == c["start"] for x in clips):
+                clips.append(c)
+    except Exception as e:
+        log.info("previous-day clips for %s: %s", cam["name"], e)
+    clips.sort(key=lambda c: c["start"])
+    return clips
+
+
 @app.get("/cam/{cam_id}/recordings.json")
 async def recordings_json(request: Request, cam_id: int, date: str = "", month: str = ""):
     me = require(request)
@@ -489,8 +504,8 @@ async def recordings_json(request: Request, cam_id: int, date: str = "", month: 
     try:
         if month:
             return {"dates": await loop.run_in_executor(None, _month_dates, cam, month)}
-        clips = await loop.run_in_executor(None, tapo.recordings_of_day, cloud, cam["device_id"], date)
         ds, de = _day_bounds(date)
+        clips = await loop.run_in_executor(None, _clips_for_day, cam, date, ds)
         try:
             events = await loop.run_in_executor(None, tapo.detections_of_day, cloud, cam["device_id"], ds, de)
         except Exception as e:

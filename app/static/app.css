@@ -234,3 +234,6 @@ body.dragging{user-select:none;cursor:grabbing}body.dragging .wallTile:not(.lift
 .wall:fullscreen.active .wallTile:hover{box-shadow:inset 0 0 0 2px var(--acc)}
 .wall:fullscreen:not(.active){cursor:none}
 .wall:fullscreen:not(.active) .wallTile{cursor:none}
+
+/* timeline: square ends so footage reaches the edge cleanly */
+.track{border-radius:4px;overflow:hidden}.track .segs{border-radius:0}.track .future{border-radius:0}
