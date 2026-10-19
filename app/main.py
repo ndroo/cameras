@@ -35,6 +35,8 @@ def _load_dotenv(path):
 
 
 _load_dotenv(os.path.join(HERE, "..", ".env"))
+if not os.environ.get("TAPO_ACCESS_KEY"):
+    logging.getLogger("app").warning("TAPO_ACCESS_KEY / TAPO_SECRET_KEY not set: Tapo cloud login will fail")
 
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(HERE, "..", "data"))
 os.makedirs(os.path.join(DATA_DIR, "thumbs"), exist_ok=True)

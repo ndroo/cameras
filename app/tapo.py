@@ -15,8 +15,9 @@ import paho.mqtt.client as mqtt
 urllib3.disable_warnings()
 log = logging.getLogger("tapo")
 
-# App-level constants from the APK (identical in every install - not secret).
-AK, SK = "4d11b6b9d5ea4d19a829adbb9714b057", "6ed7d97f3e73467f8a5bab90b577ba4c"
+# The Tapo app's request-signing key pair. They are the same in every install of the app,
+# but they belong to TP-Link, so they come from the environment rather than living here.
+AK, SK = os.environ.get("TAPO_ACCESS_KEY", ""), os.environ.get("TAPO_SECRET_KEY", "")
 APP, VER = "TP-Link_Tapo_Android", "3.7.113"
 GW = "https://n-wap-gw.tplinkcloud.com"
 DEFAULT_MQTT_GW = "use1-app-cloudgateway.iot.i.tplinknbu.com"

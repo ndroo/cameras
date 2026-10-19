@@ -89,7 +89,7 @@
 
     <h3>How the boiler reading is produced</h3>
     <ul>
-      <li>Every 30 minutes a fresh 1920×1080 still is pulled from the camera through TP-Link's cloud relay (8 frames decoded, sharpest kept).</li>
+      <li>Every 15 minutes a fresh 1920×1080 still is pulled from the camera through TP-Link's cloud relay (8 frames decoded, sharpest kept).</li>
       <li>Three images go to Claude: the annotated Figure 51 legend, a small full-frame for context, and a 3× zoom of the LCD panel.</li>
       <li>The model must answer in a fixed JSON schema (one boolean per icon, plus temperature, clock, error codes, and a confidence level), so a reading can never be malformed.</li>
       <li>A segment counts as lit only when it is solidly dark. Every segment on an LCD has a faint ghost outline, and ghosts are off.</li>
@@ -126,7 +126,7 @@
       <li><b>Rooms panel</b> on the timeline: one solid line per thermostat for indoor temperature, dashed for its set-point, in the thermostat's colour.</li>
       <li><b>"&lt;name&gt; call" lanes</b> sit under the Taco zone LEDs so the chain can be read top to bottom: thermostat calls → zone relay LED lights → boiler shows a heat call → burner fires → room temperature rises.</li>
       <li>The account has thermostats at three properties; only the three at 180 Beatrice St are shown here (the others are still logged). ecobee names all three "Home"; the unit number is the Taco zone number: <b>Zone 1 = ecobee4</b>, <b>Zone 2 = ecobee3 lite</b> (offline since 9 Oct 2026), <b>Zone 3 = Smart Thermostat</b>. On the timeline each zone's relay LED lane ("Zone n LED") is followed by its thermostat's call lane ("Zone n stat"), so a thermostat call that doesn't light its relay, or a relay that stays on with no call, stands out as a mismatch between the two lanes.</li>
-      <li>The refresh token is stored encrypted in the repo (<code>ecobee_token.enc</code>); the key lives only in a GitHub secret. The password is never stored.</li>
+      <li>The refresh token is kept encrypted on the server; the key lives only in the server's secrets. The password is never stored.</li>
     </ul>
   </div>
 
@@ -147,8 +147,8 @@
   <div class="card">
     <h2>Timeline conventions</h2>
     <ul>
-      <li>Each reading owns the 30 minutes after it, so a bar runs from one capture to the next. Consecutive identical values merge into one bar.</li>
-      <li>A hatched band means the monitor produced no reading for that period (a missed GitHub Actions run; they are scheduled every 30 minutes). It is not a boiler state.</li>
+      <li>Each reading owns the 15 minutes after it, so a bar runs from one capture to the next. Consecutive identical values merge into one bar.</li>
+      <li>A hatched band means the monitor produced no reading for that period (a missed capture; they run every 15 minutes). It is not a boiler state.</li>
       <li>A dashed grey lane segment means that field was not captured by the version of the monitor running at the time.</li>
       <li>White dots on the temperature line mark captures where the burner was firing.</li>
     </ul>
