@@ -272,3 +272,13 @@ button.busy{opacity:.7;cursor:progress}
 .seg.priv,.track .seg.priv{background:repeating-linear-gradient(135deg,#000 0 6px,#1c1f26 6px 12px);z-index:1}
 .legend .privSw{background:#000;border:1px solid var(--muted)}
 .kind.privacy_on{background:rgba(191,90,242,.28)}.kind.privacy_off{background:rgba(52,199,89,.2)}
+
+/* sound */
+.controls button.attn{background:var(--acc);color:#fff;animation:attn 1.6s ease-in-out 3}
+@keyframes attn{50%{box-shadow:0 0 0 4px rgba(79,140,255,.35)}}
+.wallTile{cursor:pointer}
+.wallTile.sound{box-shadow:0 0 0 2px var(--acc),0 10px 30px rgba(0,0,0,.45)}
+.wallTile .tag .snd{font-style:normal;font-size:13px}
+.wallTile .tag .open{margin-left:auto;pointer-events:auto;color:rgba(255,255,255,.8);text-decoration:none;padding:4px 7px;border-radius:6px;font-size:14px}
+.wallTile .tag .open:hover{background:rgba(255,255,255,.15);color:#fff}
+.wallTile .tag .open+.grip{margin-left:0}

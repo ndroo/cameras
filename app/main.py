@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, sms, tapo
+from . import audio, db, sms, tapo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("app")
@@ -679,23 +679,23 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     lock = _plock(cam_id)
     if not lock.acquire(blocking=False):
         raise HTTPException(409, "Someone is already playing back from this camera. Try again in a moment.")
-    # small probe window + flush per packet so the first fragment leaves as soon as the
-    # camera sends it (ffmpeg's default 5 MB probe would hold a whole short clip back)
-    ff = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-probesize", "300000", "-analyzeduration", "500000",
-                           "-fflags", "nobuffer", "-i", "pipe:0", "-map", "0:v", "-c", "copy", "-flush_packets", "1",
-                           "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"],
-                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    state = {"err": None}
+    # read from the card until we know whether it has sound, then start ffmpeg: video is
+    # copied, the camera's G.711 audio becomes AAC (see audio.py); fragmented MP4 so the
+    # browser can play it as it arrives
+    sp = audio.Splitter()
+    rec = tapo.iter_recording(mq, cam["device_id"], cloud.term, start, end, cloud=cloud)
+    try:
+        pre, rest = await asyncio.get_event_loop().run_in_executor(None, audio.prime, rec, sp)
+    except Exception as e:
+        rec.close(); lock.release(); log.info("clip start cam%s: %s", cam_id, e)
+        raise HTTPException(502, "The camera did not send that footage. Try again.")
+    ff, afd = audio.start_ffmpeg(sp, ["-flush_packets", "1", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"])
 
     def feed():
         try:
-            for chunk in tapo.iter_recording(mq, cam["device_id"], cloud.term, start, end, cloud=cloud):
-                ff.stdin.write(chunk)
+            audio.pump(rest, ff, afd, sp, pre)
         except Exception as e:
-            state["err"] = str(e); log.info("clip feed cam%s: %s", cam_id, e)
-        finally:
-            try: ff.stdin.close()
-            except Exception: pass
+            log.info("clip feed cam%s: %s", cam_id, e)
 
     t = threading.Thread(target=feed, daemon=True); t.start()
 

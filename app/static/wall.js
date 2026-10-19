@@ -59,10 +59,10 @@ function drawWall() {
   for (const c of chosen) { const t = tiles.get(c.id); if (t && t.el.parentNode === wall) wall.appendChild(t.el); }
   for (const c of chosen) {
     if (tiles.has(c.id)) continue;
-    const el = document.createElement("a"); el.className = "wallTile"; el.href = `/cam/${c.id}`;
+    const el = document.createElement("div"); el.className = "wallTile"; el.title = "Click for sound";
     el.dataset.id = c.id;
     el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner"><i class="spin"></i>Connecting…</div>
-      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}</span><i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
+      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}</span><i class="snd" hidden>🔊</i><a class="open" href="/cam/${c.id}" title="Open this camera">↗</a><i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
     const sideways = c.rotate === 90 || c.rotate === 270; if (sideways) el.classList.add("sideways");
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
     stage.prepend(vs); wall.appendChild(el);
@@ -81,6 +81,16 @@ function drawWall() {
     const poll = setInterval(() => { const vv = vs.video; if (vv && vv.readyState >= 3 && !vv.paused && vv.currentTime > 0) { shown(); } if (!tiles.has(c.id)) clearInterval(poll); }, 500);
     if (c.private) { hint.textContent = "🔒 Privacy mode"; poster.style.opacity = "1"; }
     else vs.src = `/stream/${c.id}/ws`;
+    // click a tile to hear it (each tile toggles on its own; all start muted)
+    const snd = el.querySelector(".snd");
+    const drawSnd = () => { const vv = vs.video, on = !!vv && !vv.muted; snd.hidden = !on; el.classList.toggle("sound", on); el.title = on ? "Click to mute" : "Click for sound"; };
+    if (v) v.addEventListener("volumechange", drawSnd);
+    el.addEventListener("click", ev => {
+      if (el.dataset.dragged || ev.target.closest(".open,.grip")) return;
+      const vv = vs.video; if (!vv) return;
+      vv.muted = !vv.muted; if (!vv.muted) vv.play().catch(() => {});
+      drawSnd();
+    });
     tiles.set(c.id, { el, vs, lay }); lay(); enableDrag(el);
     new ResizeObserver(lay).observe(stage);
   }

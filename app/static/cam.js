@@ -38,6 +38,23 @@ async function saveOrient() {
   if (D.isAdmin) { const fd = new FormData(); fd.set("rotate", o.rotate); fd.set("flip_h", o.flip_h); fd.set("flip_v", o.flip_v); fetch(`/cam/${D.camId}/orientation`, { method: "POST", body: fd }); }
   else { try { localStorage.setItem("orient:" + D.camId, JSON.stringify(o)); } catch {} }
 }
+// ---------------------------------------------------------------- sound (on by default, remembered; browsers may force a muted start)
+const soundBtn = $("#soundBtn");
+let sound = true; try { sound = localStorage.getItem("sound") !== "0"; } catch {}
+const activeVideo = () => S.mode === "live" ? live.video : clip;
+function drawSound() {
+  const v = activeVideo(), on = !!v && !v.muted, blocked = sound && !on;
+  soundBtn.textContent = on ? "🔊" : "🔇"; soundBtn.classList.toggle("attn", blocked);
+  soundBtn.title = on ? "Mute" : blocked ? "Tap for sound (the browser started it muted)" : "Turn sound on";
+}
+function setSound(on) {
+  sound = on; try { localStorage.setItem("sound", on ? "1" : "0"); } catch {}
+  for (const v of [live.video, clip]) if (v) v.muted = !on;
+  const v = activeVideo(); if (on && v) v.play().catch(() => {});
+  drawSound();
+}
+for (const v of [live.video, clip]) if (v) v.addEventListener("volumechange", drawSound);
+
 function showHint(txt) { hint.innerHTML = '<i class="spin"></i>' + txt; hint.style.display = ""; }
 function hideHint() { hint.style.display = "none"; }
 
@@ -45,6 +62,7 @@ function goLive() {
   S.mode = "live"; S.playing = false;
   clip.pause(); clip.removeAttribute("src"); clip.load(); clip.hidden = true;
   if (S.priv) return showPrivacy();
+  if (live.video) live.video.muted = !sound;
   live.style.display = ""; live.src = `/stream/${D.camId}/ws`;
   modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.hidden = true; speed.hidden = true;
   poster.style.opacity = ".6"; showHint("Connecting to camera…"); status.textContent = "";
@@ -97,7 +115,8 @@ function play(t) {
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
   live.src = ""; live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz();
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}`;
-  clip.src = url; clip.playbackRate = +speed.value; clip.play().catch(() => {});
+  clip.muted = !sound; clip.src = url; clip.playbackRate = +speed.value;
+  clip.play().catch(() => { if (!clip.muted) { clip.muted = true; clip.play().catch(() => {}); } });   // no tap yet on this page: start muted
   speed.hidden = false;
   modeBtn.classList.remove("live"); modeTxt.textContent = "Go live"; label.hidden = false; label.textContent = fmtTs(t);
   poster.style.opacity = "0"; showHint("Fetching from the camera's card…"); status.textContent = "";
@@ -110,7 +129,7 @@ clip.addEventListener("timeupdate", () => { if (S.mode === "play" && S.playing &
 clip.addEventListener("ended", () => { const n = nextCovered(S.segEnd + 1); if (n !== null && n < S.dayEnd) play(n); else if (S.date === today()) goLive(); else status.textContent = "End of footage for this day."; });
 clip.addEventListener("error", () => showHint("Couldn't load that part. Try another time."));
 if (live.video) {
-  const v = live.video; v.setAttribute("playsinline", ""); v.muted = true; v.controls = false;
+  const v = live.video; v.setAttribute("playsinline", ""); v.muted = !sound; v.controls = false;
   v.addEventListener("playing", () => { if (S.mode === "live") { hideHint(); poster.style.opacity = "0"; layout(); } });
   v.addEventListener("loadedmetadata", () => noteAr(v));
   v.addEventListener("waiting", () => { if (S.mode === "live") showHint("Reconnecting…"); });
@@ -119,6 +138,7 @@ modeBtn.addEventListener("click", () => { if (S.mode !== "live") goLive(); });
 $("#player .controls").addEventListener("click", ev => {
   const b = ev.target.closest("button[data-act]"); if (!b) return;
   const a = b.dataset.act;
+  if (a === "sound") { const v = activeVideo(); setSound(!(v && !v.muted)); }
   if (a === "rotate") { o.rotate = (o.rotate + 90) % 360; layout(); saveOrient(); }
   if (a === "flip_h") { o.flip_h = o.flip_h ? 0 : 1; layout(); saveOrient(); }
   if (a === "flip_v") { o.flip_v = o.flip_v ? 0 : 1; layout(); saveOrient(); }
@@ -343,6 +363,6 @@ $("#prevM").addEventListener("click", () => { const y = +S.month.slice(0, 4), m 
 $("#nextM").addEventListener("click", () => { const y = +S.month.slice(0, 4), m = +S.month.slice(4, 6); const d = new Date(y, m, 1); loadMonth(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`); });
 
 // ---------------------------------------------------------------- start
-layout(); draw(); drawEvents();
+layout(); draw(); drawEvents(); drawSound();
 if (D.at) { S.mode = "play"; loadDay(D.date, D.at); } else { goLive(); loadDay(S.date); }
 loadMonth(S.month);
