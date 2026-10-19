@@ -7,7 +7,7 @@ and grants its members some or all of that house's cameras plus the text alerts 
 has turned on (doorbell, tamper, offline/online).  Live video comes through the Tapo
 cloud relay into go2rtc (one exec pipe per camera) and is proxied to the browser.
 """
-import asyncio, json, logging, os, random, secrets, subprocess, sys, tempfile, threading, time, uuid
+import asyncio, hashlib, json, logging, os, random, secrets, subprocess, sys, tempfile, threading, time, uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -258,6 +258,30 @@ def dev_login(request: Request, phone: str):
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie("s", tok, max_age=86400, httponly=True, samesite="lax")
     return resp
+
+
+def _link_key(tok):
+    return "link:" + hashlib.sha256(tok.encode()).hexdigest()
+
+
+@app.get("/l/{tok}", response_class=HTMLResponse)
+def login_link_page(request: Request, tok: str):
+    """One-time sign-in link an admin made. GET only shows a button, so link previews
+    in Messages/WhatsApp don't use the link up; the POST signs in."""
+    j = json.loads(db.kv_get(_link_key(tok)) or "null")
+    person = db.one("SELECT * FROM people WHERE id=?", j["person_id"]) if j and j["expires"] > time.time() else None
+    return render(request, "login_link.html", tok=tok, person=person)
+
+
+@app.post("/l/{tok}")
+def login_link_use(request: Request, tok: str):
+    key = _link_key(tok)
+    j = json.loads(db.kv_get(key) or "null")
+    db.run("DELETE FROM kv WHERE k=?", key)
+    person = db.one("SELECT * FROM people WHERE id=?", j["person_id"]) if j and j["expires"] > time.time() else None
+    if not person:
+        return RedirectResponse("/login?err=That+sign-in+link+has+expired+or+was+already+used", status_code=303)
+    return _start_session(request, person, "/")
 
 
 @app.get("/logout")
@@ -1121,6 +1145,20 @@ def admin_person(request: Request, name: str = Form(...), phone: str = Form(...)
             return RedirectResponse("/admin?msg=Passcode+must+be+at+least+6+characters", status_code=303)
         db.run("UPDATE people SET passcode_hash=? WHERE id=?", sms.hash_passcode(passcode.strip()), id)
     return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/person/{person_id}/link")
+def admin_person_link(request: Request, person_id: int):
+    """Make a one-time sign-in link (24 hours) to send to someone who's stuck."""
+    require(request, admin=True)
+    person = db.one("SELECT * FROM people WHERE id=?", person_id)
+    if not person:
+        raise HTTPException(404)
+    db.run("DELETE FROM kv WHERE k LIKE 'link:%' AND json_extract(v,'$.expires')<?", time.time())
+    tok = secrets.token_urlsafe(24)
+    db.kv_set(_link_key(tok), json.dumps({"person_id": person_id, "expires": time.time() + 86400}))
+    base = os.environ.get("BASE_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    return render(request, "login_link_made.html", person=person, url=f"{base}/l/{tok}")
 
 
 @app.post("/admin/group")

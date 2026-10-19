@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Sign in · Cameras{% endblock %}
+{% block body %}
+<div class="card narrow">
+  {% if person %}
+  <h1>Hi {{ person.name }}</h1>
+  <p class="muted">Andrew sent you a sign-in link. It works once.</p>
+  <form method="post" action="/l/{{ tok }}">
+    <button type="submit" data-busy="Signing in…">Sign in</button>
+  </form>
+  {% else %}
+  <h1>Link expired</h1>
+  <p class="muted">This sign-in link has expired or was already used.</p>
+  <p><a href="/login">Sign in with a code instead</a></p>
+  {% endif %}
+</div>
+{% endblock %}

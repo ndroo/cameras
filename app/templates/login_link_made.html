@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block title %}Sign-in link · Cameras{% endblock %}
+{% block body %}
+<div class="card narrow">
+  <h1>Sign-in link for {{ person.name }}</h1>
+  <p class="muted">Works once, for the next 24 hours. Anyone with it can sign in as {{ person.name }}, so only send it to them.</p>
+  <input id="link" value="{{ url }}" readonly onclick="this.select()">
+  <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('link').value);this.textContent='Copied'">Copy link</button>
+  <p><a href="/admin">Back to admin</a></p>
+</div>
+{% endblock %}
