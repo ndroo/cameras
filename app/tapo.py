@@ -506,6 +506,13 @@ def _client_part(obj):
             + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n")
 
 
+def start_preview(sock, resolution="HD"):
+    """Ask for live video explicitly. Most cameras start streaming as soon as the relay
+    connects, but the C500 hangs up (connection_closed, error 14) unless asked."""
+    sock.sendall(_client_part({"type": "request", "seq": 1, "params": {
+        "method": "get", "preview": {"audio": ["default"], "channels": [0], "resolutions": [resolution]}}}))
+
+
 def iter_recording(mq, device_id, term, start, end, mode="download", timeout=25, cloud=None):
     """Yield MPEG-TS bytes of the SD-card recording between two epoch times.
     mode "download" = as fast as the link allows (what the app uses for clips),

@@ -21,6 +21,7 @@ def main():
         log.error("relay request failed: %s %s", r.status_code, r.text[:200]); sys.exit(2)
     j = r.json()
     sock = tapo.connect_relay(j["relayUrl"], j["relayToken"], j["term"])
+    tapo.start_preview(sock)
     t0 = time.time(); n = 0
     try:
         for chunk in tapo.iter_ts(sock):

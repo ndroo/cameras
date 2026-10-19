@@ -744,6 +744,7 @@ def detection_loop():
 def _snapshot_from_relay(device_id):
     url, tok = mq.request_relay(device_id, timeout=15)
     sock = tapo.connect_relay(url, tok, cloud.term)
+    tapo.start_preview(sock)
     ts = bytearray(); t0 = time.time()
     try:
         for chunk in tapo.iter_ts(sock, timeout=15):
