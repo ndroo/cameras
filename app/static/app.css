@@ -139,3 +139,13 @@ ul.evList{max-height:220px;overflow:auto}
 
 .track{background:repeating-linear-gradient(135deg,var(--bg) 0 5px,rgba(127,127,127,.07) 5px 6px)}
 .seg{background:rgba(79,140,255,.55)}
+
+/* option A: breadcrumb title, no chevron in the top bar */
+.topBack{display:none}
+.camHead h1 .crumb{color:var(--muted);font-weight:500;font-size:16px}.camHead h1 .crumb:hover{color:var(--fg)}.camHead h1 .sep{color:var(--muted);margin:0 8px;font-weight:400}
+/* tidy playback controls: one height for everything in the row */
+.controls{align-items:center}
+.controls .pill,.controls .chip,.controls button,.controls .btn{height:34px;box-sizing:border-box;display:inline-flex;align-items:center;border-radius:10px;font-size:14px}
+.controls .chip{padding:0 10px;background:var(--bg);border:1px solid var(--line);color:var(--fg);font-variant-numeric:tabular-nums}
+.controls select.speed{padding:0 26px 0 10px;width:auto;font-weight:600;appearance:none;-webkit-appearance:none;background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b93a3' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 9px center}
+.controls .pill{padding:0 11px}

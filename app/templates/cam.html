@@ -1,9 +1,8 @@
 {% extends "base.html" %}{% block title %}{{ cam.name }} · Cameras{% endblock %}
-{% block back %}<a href="/" class="topBack" title="All cameras">‹</a>{% endblock %}
 {% block body %}
 <div class="camWrap" id="camWrap">
 <div class="camHead">
-  <h1>{{ cam.name }} <span class="muted">{{ cam.house_name or '' }}</span>
+  <h1><a href="/" class="crumb">All cameras</a><span class="sep">›</span>{{ cam.name }} <span class="muted">{{ cam.house_name or '' }}</span>
     <span class="status"><span class="dot {{ 'ok' if cam.online == 1 else ('bad' if cam.online == 0 else 'unk') }}"></span>{% if cam.online == 1 %}online{% elif cam.online == 0 %}offline since {{ cam.online_since|ago }}{% else %}checking{% endif %}</span></h1>
 </div>
 
@@ -16,8 +15,8 @@
   </div>
   <div class="controls">
     <button type="button" class="pill live" id="modeBtn" title="Back to live"><i></i><span id="modeTxt">LIVE</span></button>
-    <span class="small" id="label"></span>
-    <select id="speed" class="speed" title="Playback speed" hidden><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
+    <span class="chip" id="label" hidden></span>
+    <select id="speed" class="chip speed" title="Playback speed" hidden><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
     <span class="grow"></span>
     <button type="button" data-act="rotate" title="Rotate 90°">⟳</button>
     <button type="button" data-act="flip_h" title="Mirror">↔</button>

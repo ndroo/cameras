@@ -45,7 +45,7 @@ function goLive() {
   S.mode = "live"; S.playing = false;
   clip.pause(); clip.removeAttribute("src"); clip.load(); clip.hidden = true;
   live.style.display = ""; live.src = `/stream/${D.camId}/ws`;
-  modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.textContent = ""; speed.hidden = true;
+  modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.hidden = true; speed.hidden = true;
   poster.style.opacity = ".6"; showHint("Connecting to camera…"); status.textContent = "";
   S.t = now(); keepInView(S.t); history.replaceState(null, "", `/cam/${D.camId}`); layout(); draw();
 }
@@ -71,14 +71,14 @@ function play(t) {
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}`;
   clip.src = url; clip.playbackRate = +speed.value; clip.play().catch(() => {});
   speed.hidden = false;
-  modeBtn.classList.remove("live"); modeTxt.textContent = "Go live"; label.textContent = `${fmtT(S.segStart)} – ${fmtT(S.segEnd)}`;
+  modeBtn.classList.remove("live"); modeTxt.textContent = "Go live"; label.hidden = false; label.textContent = fmtTs(t);
   poster.style.opacity = "0"; showHint("Fetching from the camera's card…"); status.textContent = "";
   history.replaceState(null, "", `/cam/${D.camId}?date=${S.date}&at=${t}`); layout(); draw();
 }
 clip.addEventListener("playing", () => { hideHint(); S.playing = true; });
 clip.addEventListener("waiting", () => showHint("Buffering…"));
 clip.addEventListener("loadedmetadata", () => noteAr(clip));
-clip.addEventListener("timeupdate", () => { if (S.mode === "play" && S.playing && !drag) { S.t = S.segStart + clip.currentTime; keepInView(S.t); draw(); } });
+clip.addEventListener("timeupdate", () => { if (S.mode === "play" && S.playing && !drag) { S.t = S.segStart + clip.currentTime; label.textContent = fmtTs(S.t); keepInView(S.t); draw(); } });
 clip.addEventListener("ended", () => { const n = nextCovered(S.segEnd + 1); if (n !== null && n < S.dayEnd) play(n); else if (S.date === today()) goLive(); else status.textContent = "End of footage for this day."; });
 clip.addEventListener("error", () => showHint("Couldn't load that part. Try another time."));
 if (live.video) {
