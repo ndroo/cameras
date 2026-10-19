@@ -298,6 +298,14 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     return render(request, "cam.html", cam=cam, sd=sd, me=me, data=json.dumps(data))
 
 
+@app.get("/wall", response_class=HTMLResponse)
+def wall(request: Request):
+    me = require(request)
+    cams = [{"id": c["id"], "name": c["name"], "house": c["house_name"], "online": c["online"], "rotate": c["rotate"], "flipH": c["flip_h"],
+             "flipV": c["flip_v"], "thumbAt": int(c["thumb_at"] or 0)} for c in db.person_cameras(me)]
+    return render(request, "wall.html", me=me, data=json.dumps(cams))
+
+
 @app.get("/events", response_class=HTMLResponse)
 def events_page(request: Request):
     me = require(request)
