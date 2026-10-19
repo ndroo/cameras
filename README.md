@@ -26,6 +26,26 @@ Tapo app is still used to configure cameras.
   The payload shapes are not confirmed yet - press the doorbell, then look at the log
   and adjust `classify()`.
 
+## Heating monitor (moved in from ndroo/tapo-boiler-monitor on 2026-10-19)
+
+`heating/` holds the boiler/zone-panel reader (`monitor.py`, `lcd_pixels.py`), the ecobee and
+weather pollers and the dashboard (`index.html`, `legend.html`). The app runs one cycle every
+`HEATING_EVERY` seconds (default 15 min) as subprocesses; stills are taken through the app's own
+relay session (`heating/grab_boiler_cloud.py` asks `/internal/relay/<device>` for a relay). Data
+lives on the volume under `$DATA_DIR/heating/stills` (readings.jsonl, ecobee.jsonl, weather.jsonl,
+state files, latest stills; timestamped stills are pruned after two days). The dashboard is public
+at `/heating` and is proxied by the 180 Beatrice site as https://180beatrice.andrewmcgrath.info/heating .
+Secrets: `ANTHROPIC_API_KEY`, `ECOBEE_TOKEN_KEY` (+ `ecobee_token.enc`, copied to the volume on first
+run), `ALERT_TO`, optional `ECOBEE_EMAIL/PASSWORD/TOTP_SECRET`.
+
+## Watchdog and backups
+
+The app pings `WATCH_URLS` (the 180 Beatrice site and andrewmcgrath.info) every 5 minutes and
+texts every admin after two failed checks (and again when the site is back). At 03:30 Toronto
+time it copies the SQLite database and the heating data to `$DATA_DIR/backups` (four weeks kept)
+and uploads both to the Tigris bucket in `BUCKET_NAME`. Admin → System shows the state of all three
+and has "run a cycle now" / "back up now" buttons.
+
 ## Running
 
 ```
