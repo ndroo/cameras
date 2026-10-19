@@ -4,7 +4,8 @@
 {% if not events %}<p class="muted">No events yet. Doorbell presses, tamper alerts and cameras going offline or back online show up here.</p>{% endif %}
 <ul class="events big">
 {% for e in events %}
-  <li><span class="kind {{ e.kind }}">{{ e.kind }}</span> <a href="/cam/{{ e.camera_id }}">{{ e.cam_name }}</a> <span class="muted">{{ e.house_name or '' }} · {{ e.at|dt }}</span></li>
+  {% set what = e.detail.split(':', 2)[2] if e.detail and e.detail.startswith('det:') else '' %}
+  <li><span class="kind {{ e.kind }}">{{ e.kind }}</span> <a href="/cam/{{ e.camera_id }}{% if what %}?date={{ e.at|ymd }}&at={{ (e.at - 5)|int }}{% endif %}">{{ e.cam_name }}</a>{% if what %} <span>{{ what }}</span>{% endif %} <span class="muted">{{ e.house_name or '' }} · {{ e.at|dt }}</span></li>
 {% endfor %}
 </ul>
 {% endblock %}

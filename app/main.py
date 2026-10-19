@@ -75,6 +75,7 @@ STATIC_V = str(int(time.time()))          # changes on every start, so browsers 
 tpl.env.globals["v"] = STATIC_V
 tpl.env.filters["ago"] = fmt_ago
 tpl.env.filters["dt"] = fmt_dt
+tpl.env.filters["ymd"] = lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%Y%m%d")
 
 
 # ------------------------------------------------------------------ auth
@@ -558,13 +559,14 @@ COOLDOWN = {"doorbell": 90, "tamper": 600, "motion": 900, "offline": 1800, "onli
 _last_sms = {}
 
 
-def record_event(cam, kind, detail=""):
-    eid = db.run("INSERT INTO events(camera_id,kind,at,detail) VALUES(?,?,?,?)", cam["id"], kind, time.time(), detail[:500])
+def record_event(cam, kind, detail="", at=None):
+    eid = db.run("INSERT INTO events(camera_id,kind,at,detail) VALUES(?,?,?,?)", cam["id"], kind, at or time.time(), detail[:500])
     house = db.one("SELECT name FROM houses WHERE id=?", cam["house_id"]) if cam["house_id"] else None
     where = f"{cam['name']}" + (f" at {house['name']}" if house else "")
-    text = {"doorbell": f"Doorbell: {where}.",
+    what = detail.split(":", 2)[2] if detail.startswith("det:") else ""
+    text = {"doorbell": f"Doorbell: {where}." + (f" ({what})" if what else ""),
             "tamper": f"Tamper alert: {where} was moved, covered or tampered with.",
-            "motion": f"Motion: {where}.",
+            "motion": f"{(what or 'motion').capitalize()}: {where}.",
             "offline": f"Camera offline: {where} stopped responding.",
             "online": f"Camera back online: {where}."}.get(kind, f"{kind}: {where}")
     base = os.environ.get("BASE_URL", "").rstrip("/")
@@ -596,6 +598,53 @@ def on_mqtt_event(topic, payload):
     cam = db.one("SELECT * FROM cameras WHERE device_id=?", device_id)
     if cam:
         record_event(cam, kind, detail)
+
+
+# ------------------------------------------------------------------ detection sync (safety net for push events)
+DET_INTERVAL = int(os.environ.get("DET_INTERVAL", "60"))
+DET_KIND = {"ring": "doorbell", "missed doorbell ring": "doorbell", "doorbell ring answered": "doorbell", "tamper": "tamper", "anti-theft": "tamper"}
+
+
+def _det_kind(labels):
+    for l in labels:
+        if l in DET_KIND:
+            return DET_KIND[l]
+    return "motion"
+
+
+def sync_detections(cam, lookback=600, notify=True):
+    """Pull the camera's own detection list for the last `lookback` seconds and record
+    anything new. Doorbell rings arrive here within a minute even if the cloud push
+    never reaches us. Returns the number of new events."""
+    now = time.time()
+    dets = tapo.detections_of_day(cloud, cam["device_id"], int(now - lookback), int(now) + 60)
+    n = 0
+    for d in dets:
+        tag = f"det:{d['start']}:"
+        if db.one("SELECT 1 FROM events WHERE camera_id=? AND detail LIKE ?", cam["id"], tag + "%"):
+            continue
+        kind = _det_kind(d["labels"]); labels = ", ".join(d["labels"])
+        if notify and now - d["start"] < 180:
+            record_event(cam, kind, tag + labels, at=d["start"])
+        else:   # old: keep the record, skip the text
+            db.run("INSERT INTO events(camera_id,kind,at,detail) VALUES(?,?,?,?)", cam["id"], kind, d["start"], tag + labels)
+        n += 1
+    return n
+
+
+def detection_loop():
+    time.sleep(40)
+    first = True
+    while True:
+        for cam in db.q("SELECT * FROM cameras WHERE enabled=1 AND online=1"):
+            try:
+                sync_detections(cam, lookback=86400 if first else 600, notify=not first)
+            except Exception as e:
+                if not any(code in str(e) for code in ("71114", "71105")):   # no card / detection off: quietly skip
+                    log.info("detections %s: %s", cam["name"], e)
+            time.sleep(1)
+        first = False
+        time.sleep(DET_INTERVAL)
 
 
 # ------------------------------------------------------------------ health checks
@@ -818,6 +867,7 @@ async def startup():
     if cloud.email:
         mq.start()
         threading.Thread(target=health_loop, name="health", daemon=True).start()
+        threading.Thread(target=detection_loop, name="detections", daemon=True).start()
     else:
         log.warning("TPLINK_EMAIL not set: streams and health checks disabled")
     asyncio.create_task(_register_later())
