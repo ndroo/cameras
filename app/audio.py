@@ -150,7 +150,9 @@ def start_ffmpeg(sp, out_args, in_args=()):
     PCM on a second pipe (encoded to AAC). Returns (proc, audio_write_fd or None)."""
     # no "-fflags nobuffer": it throws away the packets read while probing, first
     # keyframe included, so the picture started a whole GOP (~2 s) late
-    base = ["ffmpeg", "-loglevel", "error", "-probesize", "300000", "-analyzeduration", "500000",
+    # one thread: eight of these run at once on a small machine, and copying video plus
+    # encoding 8-16 kHz mono needs almost nothing
+    base = ["ffmpeg", "-loglevel", "error", "-threads", "1", "-filter_threads", "1", "-probesize", "300000", "-analyzeduration", "500000",
             *in_args, "-f", "mpegts", "-i", "pipe:0"]
     if not sp.rate:
         return subprocess.Popen(base + ["-map", "0:v", "-c:v", "copy", *out_args],
@@ -204,7 +206,7 @@ def pump(chunks, proc, afd, sp, pre=()):
         for c in pre:
             put(c)
         for c in chunks:
-            if dead.is_set() or qv.qsize() > 4000:
+            if dead.is_set() or qv.qsize() > 200:     # ~3 MB: ffmpeg has stopped reading
                 break
             sp.feed(c); put(c)
     finally:

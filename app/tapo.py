@@ -10,7 +10,6 @@ relay credentials over loopback (see pipe.py).
 import base64, hashlib, hmac, json, os, re, socket, ssl, threading, time, uuid, logging
 from urllib.parse import urlparse
 import requests, urllib3
-import paho.mqtt.client as mqtt
 
 urllib3.disable_warnings()
 log = logging.getLogger("tapo")
@@ -168,6 +167,7 @@ class MqttSession:
         if not jwt:
             raise RuntimeError("no JWT")
         host = urlparse(gw if "://" in gw else "wss://" + gw).hostname
+        import paho.mqtt.client as mqtt   # here, not at the top: the per-camera stream pipes import this module and never use MQTT
         c = mqtt.Client(client_id=self.client_id, clean_session=True, protocol=mqtt.MQTTv311, transport="websockets")
         c.ws_set_options(path="/mqtt")
         c.tls_set(cert_reqs=ssl.CERT_NONE); c.tls_insecure_set(True)

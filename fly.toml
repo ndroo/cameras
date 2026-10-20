@@ -1,5 +1,8 @@
 app = "cameras-andrewmcgrath"
 primary_region = "yyz"
+# safety net: each live camera runs a pipe + ffmpeg (~60 MB); without swap a heating
+# cycle on top of a full multi-view got the app OOM-killed, dropping every stream
+swap_size_mb = 1024
 
 [build]
 
