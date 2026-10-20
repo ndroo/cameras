@@ -510,6 +510,10 @@ PX_FIELD_MAP = {"flame_on": "flame", "fan_on": "fan", "boiler_pump": "boiler_pum
 PROVISIONAL_FIELDS = {"dhw_icon": "dhw_box", "dhw_pump": "dhw_pump", "sun_icon": "sun", "snowflake_icon": "snowflake",
                       "info_icon": "info", "wrench_icon": "wrench"}
 ALERT_ON_PIXEL_MISS = ("mode", "temperature")   # arbiter siding with the model on these -> alert
+# Icons behind PIXEL_FIELDS. A score that lands between the calibrated off_max and on_min is
+# outside anything seen at calibration (drift, glare, a half-lit segment) - ask the model even
+# when the field is trusted.
+GAP_ICONS = ("radiator", "dhw_box", "flame", "boiler_pump", "ch_pump")
 
 
 def _trust_path(out): return os.path.join(out, "lcd_trust.json")
@@ -550,6 +554,14 @@ def verify_reasons(px, cur, prev, trust):
         reasons.append("LCD not registered (camera moved / screen off)")
     elif px.get("temperature_f") is None:
         reasons.append("digits do not decode (error code?)")
+    if px.get("ok"):
+        import lcd_pixels
+        icons = lcd_pixels._calib()["icons"]
+        gap = [f"{n} {px['scores'][n]}" for n in GAP_ICONS
+               if n in px.get("scores", {}) and icons[n].get("off_max") is not None and icons[n].get("on_min") is not None
+               and icons[n]["off_max"] < px["scores"][n] < icons[n]["on_min"]]
+        if gap:
+            reasons.append("pixel score between calibrated off/on ranges: " + ", ".join(gap))
     lit_prov = [n for n in px.get("provisional", []) if px.get(n)]
     if lit_prov:
         reasons.append("unconfirmed icon lit: " + ", ".join(lit_prov))
@@ -572,6 +584,8 @@ def _field_equal(f, a, b):
     if f == "temperature":
         x, y = temp_f(a), temp_f(b)
         return x is not None and y is not None and abs(x - y) <= 1
+    if f == "mode":
+        return a == b
     return bool(a) == bool(b)
 
 
@@ -635,6 +649,7 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
     # A model-only claim (pixels off) needs the arbiter too - the model has false-positived on DHW before.
     arbiter_q = []          # things the arbiter must rule on this cycle
     prov_model_only = []
+    prov_px_only = []
     for fld, icon in PROVISIONAL_FIELDS.items():
         if icon not in px.get("provisional", []):
             continue
@@ -645,8 +660,8 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                                             "confirmed": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": model}
             cur["notes"] += f" | {icon} icon confirmed lit by {model} -> box promoted"
         elif px_lit and not m_lit:
-            cur[fld] = False
-            cur["notes"] += f" | {icon}: pixels lit but {model} says off (reported off; box still unconfirmed)"
+            cur[fld] = False    # off unless the arbiter sees it too
+            prov_px_only.append((fld, icon)); arbiter_q.append(fld)
         elif m_lit and not px_lit:
             prov_model_only.append((fld, icon)); arbiter_q.append(fld)
     # An error code claimed by the model while the digits decode as a plain number is suspect.
@@ -673,6 +688,8 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                 with_px = _field_equal(f, cur.get(f), arb.get(f)); verdict[f] = "pixels" if with_px else "model"
                 if not with_px:
                     cur[f] = m.get(f); cur["source"]["model"].append(f)
+                    if f == "mode":   # mode is re-derived from the icons below, so take the arbiter's icons
+                        cur["dhw_icon"], cur["ch_icon"] = bool(arb.get("dhw_icon")), bool(arb.get("ch_icon"))
                     cur.setdefault("pixel_miss", []).append(f)
                     if f in ALERT_ON_PIXEL_MISS:
                         cur["confidence"] = "low"
@@ -682,6 +699,16 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                     cur["notes"] += f" | {icon}: both models say lit but the pixel box (score {px['scores'][icon]}) does not - box likely misplaced, needs recalibration"
                 else:
                     cur[fld] = False; verdict[fld] = "pixels"
+            for fld, icon in prov_px_only:
+                if bool(arb.get(fld)):
+                    cur[fld] = True; verdict[fld] = "pixels"
+                    thr = (px["scores"][icon] + (lcd_pixels._calib()["icons"][icon].get("off_max") or 0)) / 2
+                    trust["learned_icons"][icon] = {"thr": round(thr, 1), "score": px["scores"][icon],
+                                                    "confirmed": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": confirm_model}
+                    cur["notes"] += f" | {icon}: pixels lit, {model} says off, {confirm_model} sees it -> lit, box promoted"
+                else:
+                    verdict[fld] = "model"
+                    cur["notes"] += f" | {icon}: pixels lit but {model} and {confirm_model} say off (reported off; box still unconfirmed)"
             if "error_codes" in arbiter_q:
                 if arb.get("error_codes"):
                     verdict["error_codes"] = "model"; cur["error_codes"] = sorted(set(cur["error_codes"]) | set(arb["error_codes"]))
