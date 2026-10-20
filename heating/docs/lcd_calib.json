@@ -67,8 +67,8 @@
     243,
     93
    ],
-   "thr": 43.7,
-   "on_min": 55.3,
+   "thr": 38.9,
+   "on_min": 45.8,
    "off_max": 32.0
   },
   "flame": {
@@ -78,8 +78,8 @@
     600,
     100
    ],
-   "thr": 29.6,
-   "on_min": 37.4,
+   "thr": 25.9,
+   "on_min": 30.0,
    "off_max": 21.8
   },
   "fan": {
@@ -89,8 +89,8 @@
     554,
     97
    ],
-   "thr": 31.8,
-   "on_min": 39.6,
+   "thr": 27.8,
+   "on_min": 31.6,
    "off_max": 23.9
   },
   "boiler_pump": {
@@ -100,8 +100,8 @@
     563,
     138
    ],
-   "thr": 32.9,
-   "on_min": 44.9,
+   "thr": 31.0,
+   "on_min": 41.1,
    "off_max": 20.9
   },
   "ch_pump": {
@@ -111,8 +111,8 @@
     614,
     141
    ],
-   "thr": 40.9,
-   "on_min": 51.0,
+   "thr": 37.6,
+   "on_min": 44.5,
    "off_max": 30.7
   },
   "house": {
@@ -144,8 +144,8 @@
     73,
     20
    ],
-   "thr": NaN,
-   "off_max": NaN,
+   "thr": 32.3,
+   "off_max": 20.3,
    "provisional": true
   },
   "snowflake": {
@@ -161,14 +161,14 @@
   },
   "dhw_box": {
    "box": [
-    329,
-    16,
-    353,
-    40
+    324,
+    26,
+    344,
+    46
    ],
-   "thr": 22.0,
-   "off_max": 10.0,
-   "provisional": true
+   "thr": 19.5,
+   "on_min": 31.8,
+   "off_max": 7.2
   },
   "info": {
    "box": [
@@ -194,14 +194,14 @@
   },
   "dhw_pump": {
    "box": [
-    571,
-    157,
-    595,
-    181
+    558,
+    140,
+    582,
+    164
    ],
-   "thr": 18.9,
-   "off_max": 6.9,
-   "provisional": true
+   "thr": 14.6,
+   "on_min": 24.8,
+   "off_max": 4.4
   }
  },
  "digits": {
@@ -235,5 +235,5 @@
    }
   ]
  },
- "calibrated": "2026-10-17 from 60 frames 2026-10-16T02:23Z..2026-10-17T14:43Z"
+ "calibrated": "2026-10-17 from 60 frames 2026-10-16T02:23Z..2026-10-17T14:43Z; thresholds re-centred and DHW boxes placed 2026-10-20 from 146 frames 2026-10-18T21Z..2026-10-20T20Z"
 }

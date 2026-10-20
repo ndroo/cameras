@@ -67,12 +67,15 @@ LEGEND_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", 
 # and a radius. A lit LED has a blown-out white core (min(R,G,B) >= 200 over most of the
 # disc); an unlit one is at most a dim colour bleed. Measured over 11 stills: ON = 0.81-0.96
 # white fraction, OFF = 0.00-0.28 (zone 2 sitting between two lit LEDs is the worst case).
+# Re-measured 2026-10-20 over 341 cycles: ON = 0.67-0.98 (the panel has dimmed), OFF = 0.00-0.49;
+# the 0.42-0.49 cases are all zone 1 bleeding between lit power and zone 2 LEDs, which the model
+# called ON 6 times out of 8 while zone 1's thermostat was not calling.
 ZONE_LEDS = {"power": (1129, 462), "zone1": (1129, 487), "zone2": (1129, 510),
              "zone3": (1129, 534), "zone4": (1129, 558)}
 LED_RADIUS = 8
 LED_WHITE_MIN = 200          # per-channel floor for a "white core" pixel
-LED_ON_FRAC = 0.5            # white fraction above this = ON
-LED_AMBIGUOUS = (0.35, 0.65) # inside this band -> ask Claude to confirm
+LED_ON_FRAC = 0.58           # white fraction above this = ON
+LED_AMBIGUOUS = (0.53, 0.63) # inside this band -> ask Claude to confirm
 
 # HTP UFT-series boiler, P-950EH control. Icon legend is from manual LP-542 Figure 51
 # (LCD Display). The model gets the annotated figure itself as a reference image.
@@ -502,6 +505,10 @@ PX_FIELD_MAP = {"flame_on": "flame", "fan_on": "fan", "boiler_pump": "boiler_pum
 PROVISIONAL_FIELDS = {"dhw_icon": "dhw_box", "dhw_pump": "dhw_pump", "sun_icon": "sun", "snowflake_icon": "snowflake",
                       "info_icon": "info", "wrench_icon": "wrench"}
 ALERT_ON_PIXEL_MISS = ("mode", "temperature")   # arbiter siding with the model on these -> alert
+# Icons behind PIXEL_FIELDS. A score that lands between the calibrated off_max and on_min is
+# outside anything seen at calibration (drift, glare, a half-lit segment) - ask the model even
+# when the field is trusted.
+GAP_ICONS = ("radiator", "dhw_box", "flame", "boiler_pump", "ch_pump")
 
 
 def _trust_path(out): return os.path.join(out, "lcd_trust.json")
@@ -542,6 +549,14 @@ def verify_reasons(px, cur, prev, trust):
         reasons.append("LCD not registered (camera moved / screen off)")
     elif px.get("temperature_f") is None:
         reasons.append("digits do not decode (error code?)")
+    if px.get("ok"):
+        import lcd_pixels
+        icons = lcd_pixels._calib()["icons"]
+        gap = [f"{n} {px['scores'][n]}" for n in GAP_ICONS
+               if n in px.get("scores", {}) and icons[n].get("off_max") is not None and icons[n].get("on_min") is not None
+               and icons[n]["off_max"] < px["scores"][n] < icons[n]["on_min"]]
+        if gap:
+            reasons.append("pixel score between calibrated off/on ranges: " + ", ".join(gap))
     lit_prov = [n for n in px.get("provisional", []) if px.get(n)]
     if lit_prov:
         reasons.append("unconfirmed icon lit: " + ", ".join(lit_prov))
@@ -564,6 +579,8 @@ def _field_equal(f, a, b):
     if f == "temperature":
         x, y = temp_f(a), temp_f(b)
         return x is not None and y is not None and abs(x - y) <= 1
+    if f == "mode":
+        return a == b
     return bool(a) == bool(b)
 
 
@@ -627,6 +644,7 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
     # A model-only claim (pixels off) needs the arbiter too - the model has false-positived on DHW before.
     arbiter_q = []          # things the arbiter must rule on this cycle
     prov_model_only = []
+    prov_px_only = []
     for fld, icon in PROVISIONAL_FIELDS.items():
         if icon not in px.get("provisional", []):
             continue
@@ -637,8 +655,8 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                                             "confirmed": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": model}
             cur["notes"] += f" | {icon} icon confirmed lit by {model} -> box promoted"
         elif px_lit and not m_lit:
-            cur[fld] = False
-            cur["notes"] += f" | {icon}: pixels lit but {model} says off (reported off; box still unconfirmed)"
+            cur[fld] = False    # off unless the arbiter sees it too
+            prov_px_only.append((fld, icon)); arbiter_q.append(fld)
         elif m_lit and not px_lit:
             prov_model_only.append((fld, icon)); arbiter_q.append(fld)
     # An error code claimed by the model while the digits decode as a plain number is suspect.
@@ -665,6 +683,8 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                 with_px = _field_equal(f, cur.get(f), arb.get(f)); verdict[f] = "pixels" if with_px else "model"
                 if not with_px:
                     cur[f] = m.get(f); cur["source"]["model"].append(f)
+                    if f == "mode":   # mode is re-derived from the icons below, so take the arbiter's icons
+                        cur["dhw_icon"], cur["ch_icon"] = bool(arb.get("dhw_icon")), bool(arb.get("ch_icon"))
                     cur.setdefault("pixel_miss", []).append(f)
                     if f in ALERT_ON_PIXEL_MISS:
                         cur["confidence"] = "low"
@@ -674,6 +694,16 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                     cur["notes"] += f" | {icon}: both models say lit but the pixel box (score {px['scores'][icon]}) does not - box likely misplaced, needs recalibration"
                 else:
                     cur[fld] = False; verdict[fld] = "pixels"
+            for fld, icon in prov_px_only:
+                if bool(arb.get(fld)):
+                    cur[fld] = True; verdict[fld] = "pixels"
+                    thr = (px["scores"][icon] + (lcd_pixels._calib()["icons"][icon].get("off_max") or 0)) / 2
+                    trust["learned_icons"][icon] = {"thr": round(thr, 1), "score": px["scores"][icon],
+                                                    "confirmed": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": confirm_model}
+                    cur["notes"] += f" | {icon}: pixels lit, {model} says off, {confirm_model} sees it -> lit, box promoted"
+                else:
+                    verdict[fld] = "model"
+                    cur["notes"] += f" | {icon}: pixels lit but {model} and {confirm_model} say off (reported off; box still unconfirmed)"
             if "error_codes" in arbiter_q:
                 if arb.get("error_codes"):
                     verdict["error_codes"] = "model"; cur["error_codes"] = sorted(set(cur["error_codes"]) | set(arb["error_codes"]))
