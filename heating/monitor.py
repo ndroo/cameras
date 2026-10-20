@@ -593,6 +593,14 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
     """Pixel-first reading verified by the model. Returns (reading, usage, px, trust_summary)."""
     import lcd_pixels
     trust = load_trust(out); trust["cycles"] += 1
+    if trust.get("pixel_method") != lcd_pixels.METHOD:
+        # Agreements were earned by a different pixel reader, and learned icon thresholds are in
+        # its units: start trust over so the model checks the new reader until it earns it.
+        if trust.get("pixel_method") or trust["fields"]:
+            log(f"boiler: pixel method {trust.get('pixel_method')} -> {lcd_pixels.METHOD}, trust reset")
+            trust.setdefault("history", []).append({"method": trust.get("pixel_method"), "ended": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                    "fields": trust["fields"], "learned_icons": trust["learned_icons"]})
+        trust["fields"] = {}; trust["learned_icons"] = {}; trust["pixel_method"] = lcd_pixels.METHOD
     usage = {"model": None, "input": 0, "output": 0, "cache_read": 0}
     px = lcd_pixels.read(p, lcd_crop, LCD_LAST.get("template"), learned=trust["learned_icons"])
     cur = px_as_reading(px)
@@ -656,7 +664,7 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
         px_lit, m_lit = bool(px.get(icon)), bool(m.get(fld))
         if px_lit and m_lit:
             thr = (px["scores"][icon] + (lcd_pixels._calib()["icons"][icon].get("off_max") or 0)) / 2
-            trust["learned_icons"][icon] = {"thr": round(thr, 1), "score": px["scores"][icon],
+            trust["learned_icons"][icon] = {"thr": round(thr, 3), "score": px["scores"][icon],
                                             "confirmed": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": model}
             cur["notes"] += f" | {icon} icon confirmed lit by {model} -> box promoted"
         elif px_lit and not m_lit:
@@ -703,7 +711,7 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                 if bool(arb.get(fld)):
                     cur[fld] = True; verdict[fld] = "pixels"
                     thr = (px["scores"][icon] + (lcd_pixels._calib()["icons"][icon].get("off_max") or 0)) / 2
-                    trust["learned_icons"][icon] = {"thr": round(thr, 1), "score": px["scores"][icon],
+                    trust["learned_icons"][icon] = {"thr": round(thr, 3), "score": px["scores"][icon],
                                                     "confirmed": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": confirm_model}
                     cur["notes"] += f" | {icon}: pixels lit, {model} says off, {confirm_model} sees it -> lit, box promoted"
                 else:

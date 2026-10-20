@@ -7,9 +7,13 @@ Pipeline (all numpy + Pillow):
      corners calibrated for that template (docs/lcd_calib.json).
   3. The flat image is registered (+-6 px) against docs/lcd_flat_ref.png so a small camera
      nudge does not move the icon boxes.
-  4. Darkness = (all-off reference docs/lcd_flat_off.png) - (frame): dirt, ghost segments and
-     lighting gradients cancel. Each icon is "lit" when its box's mean darkness exceeds its
-     calibrated threshold; the three temperature digits are decoded as slanted 7-segment cells.
+  4. Icons: score = share of the box's pixels at least 15% darker than the glass around the box
+     in the same frame (calib "icon_method"). This replaced darkness against the stored all-off
+     photo on 2026-10-20: lighting changes made that reference stale (unlit icons scored 9-22 and
+     lit ones drifted 10-20% lower in three days); unlit icons now score 0.00.
+     Digits: darkness = (all-off reference docs/lcd_flat_off.png) - (frame), decoded as slanted
+     7-segment cells with a cut-off per segment (the bottom strokes sit in a shadow and the right
+     digit is washed out, so one cut-off for all 21 segments did not fit).
 
 Calibration (2026-10-17, 60 frames): every icon separable with a wide margin; temperature
 exact on 59/60. Icons that never lit in that period (sun, snowflake, DHW box, [i], wrench,
@@ -77,8 +81,19 @@ def _seg_boxes(x, y, w, h, t, sk):
 
 def _cell(dark, c):
     vals = [float(dark[y0:y1, x0:x1].mean()) for (x0, y0, x1, y1) in _seg_boxes(c["x"], c["y"], c["w"], c["h"], c["t"], c["sk"])]
-    segs = tuple(1 if v > c["thr"] else 0 for v in vals)
+    thr = [t if t is not None else c["thr"] for t in c.get("seg_thr") or [c["thr"]] * 7]
+    segs = tuple(1 if v > t else 0 for v, t in zip(vals, thr))
     return ("blank" if segs == (0,) * 7 else DIG.get(segs, "?")), segs, [round(v) for v in vals]
+
+METHOD = "glass_share-v1"   # bump when icon scores change meaning: monitor resets trust and learned icons
+
+
+def icon_score(a, box, m):
+    """Share of the box's pixels at least m["darker"] darker than the surrounding glass."""
+    x0, y0, x1, y1 = box; p = m["pad"]
+    glass = float(np.percentile(a[max(0, y0 - p):y1 + p, max(0, x0 - p):x1 + p], m["glass_pct"]))
+    return float((a[y0:y1, x0:x1] < (1 - m["darker"]) * glass).mean())
+
 
 def read(path, crop, template, learned=None):
     """Full pixel read. Returns a dict; 'ok' False with 'error' if the frame can't be trusted.
@@ -93,9 +108,9 @@ def read(path, crop, template, learned=None):
     a = np.roll(np.roll(flat, -dy, 0), -dx, 1)
     dark = c["_off"] - a
     for name, ic in c["icons"].items():
-        x0, y0, x1, y1 = ic["box"]; v = float(dark[y0:y1, x0:x1].mean())
+        v = icon_score(a, ic["box"], c["icon_method"])
         thr = learned.get(name, {}).get("thr", ic["thr"])
-        out["scores"][name] = round(v, 1); out[name] = bool(v > thr)
+        out["scores"][name] = round(v, 3); out[name] = bool(v > thr)
         if ic.get("provisional") and name not in learned:
             out["provisional"].append(name)
     cells = [_cell(dark, cc) for cc in c["digits"]["cells"]]
