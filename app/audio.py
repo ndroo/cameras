@@ -179,6 +179,11 @@ class Splitter:
         self.pcm += b"".join([t[x] for x in data]); self.written += len(data)
 
 
+# drop H.264 SEI: the D130 doorbells put it after the IDR slice, which iPhone's decoder
+# rejects (MEDIA_ERR_DECODE); same as the RTSP path in rtsp.py
+VIDEO_BSF = ["-bsf:v", "filter_units=remove_types=6"]
+
+
 def start_ffmpeg(sp, out_args, in_args=()):
     """ffmpeg reading the TS on stdin (video copied) plus, when the stream has sound, the
     PCM on a second pipe (encoded to AAC). Returns (proc, audio_write_fd or None)."""
@@ -189,13 +194,13 @@ def start_ffmpeg(sp, out_args, in_args=()):
     base = ["ffmpeg", "-loglevel", "error", "-threads", "1", "-filter_threads", "1", "-probesize", "300000", "-analyzeduration", "500000",
             *in_args, "-f", "mpegts", "-i", "pipe:0"]
     if not sp.rate:
-        return subprocess.Popen(base + ["-map", "0:v", "-c:v", "copy", *out_args],
+        return subprocess.Popen(base + ["-map", "0:v", "-c:v", "copy", *VIDEO_BSF, *out_args],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL), None
     # ffmpeg starts each input's clock at its first timestamp; the PCM's first sample is
     # the first video timestamp (v0), so the two line up
     r, w = os.pipe()
     proc = subprocess.Popen(base + ["-f", "s16le", "-ar", str(sp.rate), "-ac", "1", "-i", f"pipe:{r}",
-                                    "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "48k", *out_args],
+                                    "-map", "0:v", "-map", "1:a", "-c:v", "copy", *VIDEO_BSF, "-c:a", "aac", "-b:a", "48k", *out_args],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, pass_fds=(r,))
     os.close(r)
     return proc, w

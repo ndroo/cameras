@@ -73,6 +73,15 @@ for (const v of [live.video, clip]) if (v) { v.volume = vol; v.addEventListener(
 function showHint(txt) { hint.innerHTML = '<i class="spin"></i>' + txt; hint.style.display = ""; }
 function hideHint() { hint.style.display = "none"; }
 
+// Blanking live.src only forgets the address: the websocket stays open and the stream
+// keeps playing (audible now there's sound) and holding a camera session while the card
+// plays back, which the cameras can't always serve at once. Disconnect for real.
+function stopLive() {
+  live.src = "";
+  live.ondisconnect();
+  if (live.video) live.video.pause();
+}
+
 function goLive() {
   S.mode = "live"; S.playing = false;
   clip.pause(); clip.removeAttribute("src"); clip.load(); clip.hidden = true;
@@ -86,7 +95,7 @@ function goLive() {
 // ---------------------------------------------------------------- privacy mode
 const privOverlay = $("#privOverlay");
 function showPrivacy() {
-  live.src = ""; live.style.display = "none"; hideHint(); poster.style.opacity = "0"; privOverlay.hidden = false;
+  stopLive(); live.style.display = "none"; hideHint(); poster.style.opacity = "0"; privOverlay.hidden = false;
   $("#privTxt").textContent = `Until ${fmtT(S.priv.until)} · turned on by ${S.priv.by}`;
   $("#privResume").hidden = !S.priv.canResume;
   modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.hidden = true; speed.hidden = true; status.textContent = "";
@@ -128,7 +137,7 @@ function play(t) {
   if (n === null) { status.textContent = "No footage after that time on this day."; S.t = t; draw(); return; }
   const c = covered(n); t = n;
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
-  live.src = ""; live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz();
+  stopLive(); live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz();
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}`;
   clip.volume = vol; clip.muted = !sound; clip.src = url; clip.playbackRate = +speed.value;
   clip.play().catch(() => { if (!clip.muted) { clip.muted = true; clip.play().catch(() => {}); } });   // no tap yet on this page: start muted
