@@ -5,8 +5,8 @@ vision for structured readings, and text an alert (via Twilio) if the boiler sho
 any error code or its screen is unreadable.
 
   - boiler: the P-950EH controller LCD -> temperature, mode, flame, error codes
-  - zone:   the Taco SR504-EXP panel   -> power + zones 1-4, read from PIXELS (core brightness
-            at each LED's fixed position); Claude checks per read_zone()'s trust rules and only
+  - zone:   the Taco SR504-EXP panel   -> power + zones 1-4, read from PIXELS (white-hot
+            fraction at each LED's fixed position); Claude checks per read_zone()'s trust rules and only
             decides LEDs the pixels are unsure of (or all of them when the power LED looks dark)
 
 Each cycle appends one JSON object to <out>/readings.jsonl and mirrors the latest to
@@ -67,20 +67,18 @@ LEGEND_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", 
 # and a radius. A lit LED has a blown-out white core (min(R,G,B) >= 200 over most of the
 # disc); an unlit one is at most a dim colour bleed. Measured over 11 stills: ON = 0.81-0.96
 # white fraction, OFF = 0.00-0.28 (zone 2 sitting between two lit LEDs is the worst case).
-ZONE_LEDS = {"power": (1129, 462), "zone1": (1129, 487), "zone2": (1129, 510),
-             "zone3": (1129, 534), "zone4": (1129, 558)}
-LED_RADIUS = 8
-LED_WHITE_MIN = 200          # per-channel floor for a "white core" pixel (the "white" metric, kept for the log)
-# The verdict uses "core": mean of min(R,G,B) inside a radius-4 disc at the LED centre. A lit LED
-# is blown out (all channels high) even when its white blob is small; an unlit one is either dark,
-# green (zone 1 when off) or a pink glow from a lit neighbour, and in each case one channel stays low.
-# Measured 2026-10-20 over 145 stills (rulings checked by eye): ON 226-253 (the dim-but-lit zone 1
-# frames 19 Oct 09:32 and 20 Oct 11:53 are 236 and 226; their white fraction was only 0.44-0.48),
-# OFF per LED below. Zone 2 picks up pink glow from a lit zone 3, hence its higher off_max.
-LED_CORE_RADIUS = 4
-LED_CORE_ON_MIN = 226
-LED_CORE_OFF_MAX = {"power": 186, "zone1": 119, "zone2": 186, "zone3": 121, "zone4": 121}   # power: never seen off; uses zone 2's
-# A core score between an LED's off_max and LED_CORE_ON_MIN is outside anything seen so far -> ask the model.
+# Contrast retuned 2026-10-20 over 145 stills (rulings checked by eye). The configured centres sat
+# 2-3 px left of / 1 px below the LEDs' hot centres (steady to +-0.2 px), and the radius-8 disc took
+# in the LED's rim, so a lit-but-dim zone 1 (19 Oct 09:32, 20 Oct 11:53) scored only 0.44-0.48 and
+# the Opus fallback called one of them off. Centred discs of radius 5 with a 220 floor give
+# ON 0.89-1.00 and OFF 0.00-0.15 (the 0.15 is zone 2's pink glow from a lit zone 3); before, it was
+# ON 0.44-0.97 vs OFF 0.00-0.27.
+ZONE_LEDS = {"power": (1131, 462), "zone1": (1131, 486), "zone2": (1132, 509),
+             "zone3": (1131, 533), "zone4": (1131, 557)}
+LED_RADIUS = 5
+LED_WHITE_MIN = 220          # per-channel floor for a "white-hot" pixel
+LED_ON_FRAC = 0.5            # white fraction at or above this = ON
+LED_AMBIGUOUS = (0.25, 0.75) # between calibrated OFF (<= 0.15) and ON (>= 0.89), with room for a 2 px nudge -> ask the model
 
 # HTP UFT-series boiler, P-950EH control. Icon legend is from manual LP-542 Figure 51
 # (LCD Display). The model gets the annotated figure itself as a reference image.
@@ -287,28 +285,26 @@ def analyze(client, model, prompt, images, schema, effort="low"):
 
 def led_metrics(path):
     """Per-LED pixel stats from the full frame: fraction of 'white core' pixels and mean
-    brightness inside a small disc at each LED's fixed position, plus the core score."""
+    brightness inside a small disc at each LED's fixed position."""
     im = Image.open(path).convert("RGB"); px = im.load(); out = {}
-    r2, c2 = LED_RADIUS * LED_RADIUS, LED_CORE_RADIUS * LED_CORE_RADIUS
+    r2 = LED_RADIUS * LED_RADIUS
     for name, (cx, cy) in ZONE_LEDS.items():
-        n = w = nc = 0; tot = core = 0.0
+        n = w = 0; tot = 0.0
         for x in range(cx - LED_RADIUS, cx + LED_RADIUS + 1):
             for y in range(cy - LED_RADIUS, cy + LED_RADIUS + 1):
-                d2 = (x - cx) ** 2 + (y - cy) ** 2
-                if d2 > r2: continue
+                if (x - cx) ** 2 + (y - cy) ** 2 > r2: continue
                 if not (0 <= x < im.width and 0 <= y < im.height): continue
                 r, g, b = px[x, y]; n += 1; tot += (r + g + b) / 3
                 if min(r, g, b) >= LED_WHITE_MIN: w += 1
-                if d2 <= c2: nc += 1; core += min(r, g, b)
-        out[name] = {"white": round(w / n, 3) if n else 0.0, "mean": round(tot / n) if n else 0,
-                     "core": round(core / nc) if nc else 0}
+        out[name] = {"white": round(w / n, 3) if n else 0.0, "mean": round(tot / n) if n else 0}
     return out
 
 
 def zone_from_pixels(m):
-    """Deterministic LED verdicts + the LEDs whose core score is in the uncalibrated gap."""
-    reading = {k: m[k]["core"] >= (LED_CORE_OFF_MAX[k] + LED_CORE_ON_MIN) / 2 for k in ZONE_LEDS}
-    ambiguous = [k for k in ZONE_LEDS if LED_CORE_OFF_MAX[k] < m[k]["core"] < LED_CORE_ON_MIN]
+    """Deterministic LED verdicts + the LEDs whose white fraction is outside the calibrated ranges."""
+    reading = {k: m[k]["white"] >= LED_ON_FRAC for k in ZONE_LEDS}
+    lo, hi = LED_AMBIGUOUS
+    ambiguous = [k for k in ZONE_LEDS if lo < m[k]["white"] < hi]
     return reading, ambiguous
 
 
@@ -725,11 +721,11 @@ def _trust_summary(t):
 
 # ---------------------------------------------------------------------------------------
 # Zone LEDs: pixels decide, with a trust record like the boiler's (<out>/zone_trust.json).
-#   - The model is asked when an LED's core score is in the uncalibrated gap, the power LED is
+#   - The model is asked when an LED's white fraction is outside the calibrated ranges, the power LED is
 #     dark, it's time for an audit, or (until an LED has ZONE_TRUST_FULL agreements) an LED changed.
 #   - Opus misread a dim-but-lit zone 1 (20 Oct 11:53), so it is NOT the referee here: it decides
 #     only gap LEDs (and everything when the power LED is dark, i.e. the view is suspect). A model
-#     disagreement on a clear pixel score keeps the pixels, resets that LED's streak and is logged
+#     disagreement on a clear pixel reading keeps the pixels, resets that LED's streak and is logged
 #     with the image name for a human to rule on.
 # ---------------------------------------------------------------------------------------
 ZONE_TRUST_FULL = 30            # agreements per LED before state changes stop triggering a model check
@@ -771,7 +767,7 @@ def read_zone(client, out, p, zone_llm="auto"):
         if zone_llm == "always":
             reasons.append("forced")
         if gap:
-            reasons.append("core score in uncalibrated gap: " + ", ".join(f"{k} {m[k]['core']}" for k in gap))
+            reasons.append("white fraction outside calibrated ranges: " + ", ".join(f"{k} {m[k]['white']:.2f}" for k in gap))
         if not px["power"]:
             reasons.append("power LED dark (panel off / camera moved)")
         prev = previous_zone_reading(out)
@@ -781,7 +777,7 @@ def read_zone(client, out, p, zone_llm="auto"):
         if time.time() - (trust.get("last_model_check_ts") or 0) >= ZONE_AUDIT_SECONDS:
             reasons.append("periodic audit")
     reading = dict(px, method="pixels",
-                   notes="core score per LED: " + ", ".join(f"{k} {m[k]['core']}" for k in ZONE_LEDS))
+                   notes="white-hot fraction per LED: " + ", ".join(f"{k} {m[k]['white']:.2f}" for k in ZONE_LEDS))
     entry = {"image": os.path.basename(p), "pixels": m, "reading": reading}
     if not reasons:
         return entry
@@ -811,7 +807,7 @@ def read_zone(client, out, p, zone_llm="auto"):
             st["streak"] += 1; st["agree"] += 1
     if clash:
         trust["disagreements"].append({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "image": os.path.basename(p),
-                                       "leds": {k: {"pixels": px[k], "model": model[k], "core": m[k]["core"]} for k in clash}})
+                                       "leds": {k: {"pixels": px[k], "model": model[k], "white": m[k]["white"]} for k in clash}})
         reading["notes"] += " | model disagrees on " + ", ".join(clash) + " (pixels kept; check the image)"
     if decide:
         reading["notes"] += " | model decided " + ", ".join(decide)
