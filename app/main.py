@@ -7,7 +7,7 @@ and grants its members some or all of that house's cameras plus the text alerts 
 has turned on (doorbell, tamper, offline/online).  Live video comes through the Tapo
 cloud relay into go2rtc (one exec pipe per camera) and is proxied to the browser.
 """
-import asyncio, hashlib, json, logging, os, random, secrets, socket, subprocess, sys, tempfile, threading, time, uuid
+import asyncio, hashlib, json, logging, os, random, re, secrets, socket, subprocess, sys, tempfile, threading, time, uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -520,6 +520,20 @@ async def register_all_streams():
     log.info("go2rtc config rewritten with %d streams", text.count("exec:"))
 
 
+_rtsp = None   # the in-process RTSP server (STREAM_SOURCE=rtsp)
+
+
+def _true_h264_level(msg, cam_id):
+    """go2rtc announces every H.264 stream as level 4.1 at most ("avc1.640029"). The D130
+    doorbells send 2560x1920 at level 5.0; iPhone Safari sets its decoder up from the
+    announced level and then can't play them (it kept reconnecting). Put the camera's
+    real profile/level, read from its SPS, into the codec string."""
+    lvl = _rtsp.levels.get(cam_id) if _rtsp else None
+    if lvl and "avc1." in msg:
+        return re.sub(r"avc1\.[0-9A-Fa-f]{6}", "avc1." + lvl, msg)
+    return msg
+
+
 @app.websocket("/stream/{cam_id}/ws")
 async def stream_ws(ws: WebSocket, cam_id: int):
     tok = ws.cookies.get("s")
@@ -549,11 +563,13 @@ async def stream_ws(ws: WebSocket, cam_id: int):
                     if isinstance(m, (bytes, bytearray)):
                         await ws.send_bytes(m)
                     else:
-                        await ws.send_text(m)
+                        await ws.send_text(_true_h264_level(m, cam_id))
             done, pending = await asyncio.wait([asyncio.create_task(c2s()), asyncio.create_task(s2c())],
                                                return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
+            # collect both tasks' outcomes (a viewer leaving ends them with disconnect errors)
+            await asyncio.gather(*done, *pending, return_exceptions=True)
     except (WebSocketDisconnect, websockets.ConnectionClosed):
         pass
     except Exception as e:
@@ -1434,8 +1450,10 @@ async def startup():
     threading.Thread(target=backup_loop, name="backup", daemon=True).start()
     threading.Thread(target=privacy_loop, name="privacy", daemon=True).start()
     if STREAM_SOURCE == "rtsp":
+        global _rtsp
         from . import rtsp
-        rtsp.Server(_rtsp_open, INTERNAL_SECRET, RTSP_PORT).start()
+        _rtsp = rtsp.Server(_rtsp_open, INTERNAL_SECRET, RTSP_PORT)
+        _rtsp.start()
     asyncio.create_task(_register_later())
 
 

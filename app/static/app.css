@@ -287,3 +287,37 @@ button.busy{opacity:.7;cursor:progress}
 .wallTile .tag .open{margin-left:auto;pointer-events:auto;color:rgba(255,255,255,.8);text-decoration:none;padding:4px 7px;border-radius:6px;font-size:14px}
 .wallTile .tag .open:hover{background:rgba(255,255,255,.15);color:#fff}
 .wallTile .tag .open+.grip{margin-left:0}
+
+/* mobile layout: header, camera title, controls, multi-view tiles */
+html{overflow-x:clip}
+.camWrap,.player,.stage{max-width:100%}
+.crumbShort,.controls .moreBtn{display:none}
+.controls [data-act=full]{order:1}
+.moreRow{display:contents}
+@media (max-width:640px){
+  .top{padding-left:14px;padding-right:14px}
+  .brandTxt{display:none}
+  .top nav{gap:16px}.top nav a{white-space:nowrap;font-size:14px}
+  .camHead{justify-content:flex-start;margin-bottom:8px}
+  .camHead h1{display:flex;align-items:center;gap:6px;width:100%;min-width:0;font-size:18px}
+  .camHead h1 .crumbFull,.camHead h1 .sep,.camHead h1 .house{display:none}
+  .camHead h1 .crumb{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin-left:-6px;border-radius:8px;flex:none}
+  .crumbShort{display:inline;font-size:28px;line-height:1;margin-top:-3px}
+  .camName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .camHead h1 .status{margin-left:auto;flex:none;font-size:12px}
+  .controls{gap:6px;padding:8px}
+  .controls .grow{display:none}
+  .volWrap{flex:1;min-width:0}
+  #vol{flex:1;width:auto;min-width:48px}
+  .controls .moreBtn{display:inline-flex;font-size:18px!important;letter-spacing:1px}
+  .controls .moreRow{order:2}
+  .moreRow{display:none}
+  .controls.more .moreRow{display:flex;flex-basis:100%;gap:6px;justify-content:flex-start;padding-top:2px}
+  .controls.more .moreBtn{background:var(--acc);color:#fff}
+  .dayBtn{white-space:nowrap;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .wallTile .tag{padding:14px 7px 5px;gap:5px}
+  .wallTile .tag b{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .wallTile .tag > span:not(.dot){display:none}
+  .wallTile .tag .open{padding:2px 5px;font-size:12px}
+  .wallTile .tag .grip{padding:2px 4px;font-size:13px}
+}

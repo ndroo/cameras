@@ -144,6 +144,7 @@ class Server:
 
     def __init__(self, open_ts, secret, port=8554):
         self.open_ts, self.secret, self.port = open_ts, secret, port
+        self.levels = {}                    # cam id -> H.264 profile/compat/level from the SPS, e.g. "640032"
 
     def start(self):
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -255,6 +256,7 @@ class Session:
                         if t == 7: self.sps = nal
                         elif t == 8: self.pps = nal
             if self.sps and self.pps and (self.demux.audio or got > 2_000_000):
+                self.srv.levels[self.cam] = self.sps[1:4].hex().upper()
                 return
             if got > 4_000_000:
                 raise RuntimeError("no H.264 parameter sets in the stream")

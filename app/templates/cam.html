@@ -2,7 +2,7 @@
 {% block body %}
 <div class="camWrap" id="camWrap">
 <div class="camHead">
-  <h1><a href="/" class="crumb">All cameras</a><span class="sep">›</span>{{ cam.name }} <span class="muted">{{ cam.house_name or '' }}</span>
+  <h1><a href="/" class="crumb" aria-label="All cameras"><span class="crumbFull">All cameras</span><span class="crumbShort">‹</span></a><span class="sep">›</span><span class="camName">{{ cam.name }}</span> <span class="muted house">{{ cam.house_name or '' }}</span>
     <span class="status"><span class="dot {{ 'ok' if cam.online == 1 else ('bad' if cam.online == 0 else 'unk') }}"></span>{% if cam.online == 1 %}online{% elif cam.online == 0 %}offline since {{ cam.online_since|ago }}{% else %}checking{% endif %}</span></h1>
 </div>
 
@@ -29,12 +29,15 @@
     <select id="speed" class="chip speed" title="Playback speed" hidden><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
     <span class="grow"></span>
     <span class="volWrap"><button type="button" data-act="sound" id="soundBtn" title="Sound">🔊</button><input type="range" id="vol" min="0" max="100" step="1" aria-label="Volume" title="Volume"></span>
-    <button type="button" id="privBtn" title="Privacy mode" hidden>🔒</button>
-    <button type="button" data-act="rotate" title="Rotate 90°">⟳</button>
-    <button type="button" data-act="flip_h" title="Mirror">↔</button>
-    <button type="button" data-act="flip_v" title="Flip">↕</button>
-    <button type="button" data-act="snap" title="Save a still">📷</button>
+    <button type="button" class="moreBtn" id="moreBtn" title="More controls" aria-expanded="false">⋯</button>
     <button type="button" data-act="full" title="Fullscreen">⛶</button>
+    <span class="moreRow" id="moreRow">
+      <button type="button" id="privBtn" title="Privacy mode" hidden>🔒</button>
+      <button type="button" data-act="rotate" title="Rotate 90°">⟳</button>
+      <button type="button" data-act="flip_h" title="Mirror">↔</button>
+      <button type="button" data-act="flip_v" title="Flip">↕</button>
+      <button type="button" data-act="snap" title="Save a still">📷</button>
+    </span>
   </div>
 </div>
 

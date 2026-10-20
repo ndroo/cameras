@@ -15,7 +15,7 @@
 <body>
 <div class="pbar" id="pbar"></div>
 <header class="top">
-  <span class="left">{% block back %}{% endblock %}<a href="/" class="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h13v9H3z"/><path d="M16 11l5-3v8l-5-3z"/></svg> Cameras</a></span>
+  <span class="left">{% block back %}{% endblock %}<a href="/" class="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h13v9H3z"/><path d="M16 11l5-3v8l-5-3z"/></svg><span class="brandTxt">Cameras</span></a></span>
   <nav>
     {% if me %}
       <a href="/wall" class="{% if request.url.path == '/wall' %}on{% endif %}">Multi-view</a>

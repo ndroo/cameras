@@ -150,6 +150,9 @@ if (live.video) {
   v.addEventListener("waiting", () => { if (S.mode === "live") showHint("Reconnecting…"); });
 }
 modeBtn.addEventListener("click", () => { if (S.mode !== "live") goLive(); });
+$("#moreBtn").addEventListener("click", ev => {     // phones: rotate/mirror/flip/still/privacy live in a second row
+  const c = $("#player .controls"), on = c.classList.toggle("more"); ev.currentTarget.setAttribute("aria-expanded", on);
+});
 $("#player .controls").addEventListener("click", ev => {
   const b = ev.target.closest("button[data-act]"); if (!b) return;
   const a = b.dataset.act;
