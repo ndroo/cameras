@@ -208,7 +208,7 @@ function play(t) {
   clip.volume = vol; clip.muted = !sound; setClip(url); clip.playbackRate = +speed.value;
   clip.play().catch(() => { if (!clip.muted) { clip.muted = true; clip.play().catch(() => {}); } });   // no tap yet on this page: start muted
   speed.hidden = false;
-  modeBtn.classList.remove("live"); modeTxt.textContent = "Go live"; label.hidden = false; label.textContent = fmtTs(t);
+  modeBtn.classList.remove("live"); modeTxt.innerHTML = '<span class="wideOnly">Go live</span><span class="narrowOnly">Live</span>'; label.hidden = false; label.textContent = fmtTs(t);
   poster.style.opacity = "0"; showHint("Fetching from the camera's card…"); status.textContent = "";
   history.replaceState(null, "", `/cam/${D.camId}?date=${S.date}&at=${t}`); layout(); draw();
 }

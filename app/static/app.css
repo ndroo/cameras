@@ -291,7 +291,7 @@ button.busy{opacity:.7;cursor:progress}
 /* mobile layout: header, camera title, controls, multi-view tiles */
 html{overflow-x:clip}
 .camWrap,.player,.stage{max-width:100%}
-.crumbShort,.controls .moreBtn{display:none}
+.crumbShort,.controls .moreBtn,.narrowOnly{display:none}
 .controls [data-act=full]{order:1}
 .moreRow{display:contents}
 @media (max-width:640px){
@@ -307,6 +307,9 @@ html{overflow-x:clip}
   .camHead h1 .status{margin-left:auto;flex:none;font-size:12px}
   .controls{gap:6px;padding:8px}
   .controls .grow{display:none}
+  .wideOnly{display:none}.narrowOnly{display:inline}
+  .controls #label{display:none!important}   /* the timeline header right below shows the same time */
+  .controls select.speed{padding:0 22px 0 9px;background-position:right 7px center}
   .volWrap{flex:1;min-width:0}
   #vol{flex:1;width:auto;min-width:48px}
   .controls .moreBtn{display:inline-flex;font-size:18px!important;letter-spacing:1px}
