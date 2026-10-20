@@ -62,7 +62,17 @@ cloud = tapo.TapoCloud(os.environ.get("TPLINK_EMAIL", ""), os.environ.get("TPLIN
 mq: tapo.MqttSession = None
 
 app = FastAPI(docs_url=None, redoc_url=None)
-app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
+class _Static(StaticFiles):
+    """Browsers revalidate every static file (a cheap 304 when unchanged). video-rtc.js
+    is imported by video-stream.js without a ?v= tag, so heuristic caching kept an old
+    player running after deploys."""
+    async def get_response(self, path, scope):
+        r = await super().get_response(path, scope)
+        r.headers["Cache-Control"] = "no-cache"
+        return r
+
+
+app.mount("/static", _Static(directory=os.path.join(HERE, "static")), name="static")
 tpl = Jinja2Templates(directory=os.path.join(HERE, "templates"))
 
 

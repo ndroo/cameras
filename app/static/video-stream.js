@@ -1,4 +1,4 @@
-import {VideoRTC} from '/static/video-rtc.js';
+import {VideoRTC} from '/static/video-rtc.js?v=2';  // bump when video-rtc.js changes
 
 /**
  * This is example, how you can extend VideoRTC player for your app.

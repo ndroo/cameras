@@ -18,7 +18,9 @@ export class VideoRTC extends HTMLElement {
     constructor() {
         super();
 
-        this.DISCONNECT_TIMEOUT = 5000;
+        // Local change (was 5000): a hidden tab keeps its stream for a minute, so a quick
+        // switch to another tab or app doesn't come back to "Reconnecting".
+        this.DISCONNECT_TIMEOUT = 60000;
         this.RECONNECT_TIMEOUT = 15000;
 
         this.CODECS = [
