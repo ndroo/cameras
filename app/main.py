@@ -7,7 +7,7 @@ and grants its members some or all of that house's cameras plus the text alerts 
 has turned on (doorbell, tamper, offline/online).  Live video comes through the Tapo
 cloud relay into go2rtc (one exec pipe per camera) and is proxied to the browser.
 """
-import asyncio, hashlib, json, logging, os, random, secrets, subprocess, sys, tempfile, threading, time, uuid
+import asyncio, hashlib, json, logging, os, random, secrets, socket, subprocess, sys, tempfile, threading, time, uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -44,6 +44,13 @@ GO2RTC = os.environ.get("GO2RTC_URL", "http://127.0.0.1:1984")
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET") or secrets.token_hex(16)
 os.environ["INTERNAL_SECRET"] = INTERNAL_SECRET
 PIPE_CMD = os.environ.get("PIPE_CMD", "python3 -m app.pipe")
+# "http": go2rtc pulls each camera from /internal/live in this process (one thread per
+# live camera); "exec": the old way, one python pipe process per camera (app/pipe.py)
+STREAM_SOURCE = os.environ.get("STREAM_SOURCE", "http")
+# live streams block a thread each for as long as someone watches; keep them off the
+# default executor (5 threads on this 1-CPU machine) so playback and PTZ never queue
+from concurrent.futures import ThreadPoolExecutor
+_live_pool = ThreadPoolExecutor(max_workers=48, thread_name_prefix="live")
 HEALTH_INTERVAL = int(os.environ.get("HEALTH_INTERVAL", "600"))
 OFFLINE_AFTER = int(os.environ.get("OFFLINE_AFTER_FAILS", "2"))
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Toronto"))
@@ -472,8 +479,12 @@ def _go2rtc_yaml():
     cams = db.q("SELECT * FROM cameras WHERE enabled=1 ORDER BY id")
     if not cams:
         lines.append("  {}")
+    port = os.environ.get("PORT", "8000")
     for cam in cams:
-        lines.append(f'  {_stream_name(cam)}: "exec:{PIPE_CMD} {cam["device_id"]}#killsignal=15#killtimeout=5"')
+        if STREAM_SOURCE == "exec":
+            lines.append(f'  {_stream_name(cam)}: "exec:{PIPE_CMD} {cam["device_id"]}#killsignal=15#killtimeout=5"')
+        else:
+            lines.append(f'  {_stream_name(cam)}: "http://127.0.0.1:{port}/internal/live/{cam["id"]}#header=X-Internal:{INTERNAL_SECRET}"')
     return "\n".join(lines) + "\n"
 
 
@@ -583,6 +594,63 @@ def internal_relay(request: Request, device_id: str):
     except Exception as e:
         raise HTTPException(503, str(e))
     return {"relayUrl": url, "relayToken": tok, "term": cloud.term}
+
+
+@app.get("/internal/live/{cam_id}")
+async def internal_live(request: Request, cam_id: int):
+    """The camera's live MPEG-TS (with AAC sound) for go2rtc, which asks for it while
+    anyone is watching and hangs up when the last viewer leaves. Replaces a python
+    process per camera: the relay, the TS split and the ffmpeg feed run here."""
+    if request.client.host not in ("127.0.0.1", "::1") or request.headers.get("X-Internal") != INTERNAL_SECRET:
+        raise HTTPException(403)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404)
+    loop = asyncio.get_event_loop()
+
+    def open_stream():
+        url, tok = mq.request_relay(cam["device_id"])
+        sock = tapo.connect_relay(url, tok, cloud.term)
+        tapo.start_preview(sock)
+        if os.environ.get("STREAM_AUDIO", "1") != "1":
+            return sock, None, tapo.iter_ts(sock)
+        sp = audio.Splitter()
+        pre, rest = audio.prime(tapo.iter_ts(sock), sp)
+        log.info("live %s: audio %s", cam["name"], f"{sp.codec} {sp.rate} Hz" if sp.rate else "none")
+        proc, afd = audio.start_ffmpeg(sp, ["-flush_packets", "1", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts", "pipe:1"])
+
+        def pump():
+            try:
+                audio.pump(rest, proc, afd, sp, pre)
+            except Exception as e:
+                log.info("live %s ended: %s", cam["name"], e)
+        threading.Thread(target=pump, name=f"live-{cam_id}", daemon=True).start()
+        return sock, proc, None
+
+    try:
+        sock, proc, raw = await loop.run_in_executor(_live_pool, open_stream)
+    except Exception as e:
+        log.info("live %s: %s", cam["name"], e)
+        raise HTTPException(503, str(e)[:200])
+
+    async def body():
+        # async, so a hang-up runs the finally straight away (a blocked sync generator would leak the relay)
+        try:
+            while True:
+                data = await loop.run_in_executor(_live_pool, (proc.stdout.read1 if proc else lambda n: next(raw, b"")), 65536)
+                if not data:
+                    break
+                yield data
+        finally:
+            if proc:
+                try: proc.kill()
+                except Exception: pass
+            try: sock.shutdown(socket.SHUT_RDWR)    # wakes the pump thread blocked reading the relay
+            except Exception: pass
+            try: sock.close()
+            except Exception: pass
+
+    return StreamingResponse(body(), media_type="video/mp2t", headers={"Cache-Control": "no-store"})
 
 
 # ------------------------------------------------------------------ recordings (SD card)
