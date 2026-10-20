@@ -289,7 +289,10 @@ class Session:
                 if self.done:
                     break
                 if kind == "video":
-                    nals = [n for n in nal_units(data) if n[0] & 0x1F != 9]     # drop access unit delimiters
+                    # drop access unit delimiters (9) and SEI (6): the D130 doorbells put SEI
+                    # after the IDR slice, which breaks the spec and iPhone's decoder
+                    # (MEDIA_ERR_DECODE); desktop Chrome shrugged it off
+                    nals = [n for n in nal_units(data) if n[0] & 0x1F not in (6, 9)]
                     if v0 is None:
                         if not any(n[0] & 0x1F == 5 for n in nals):
                             continue
