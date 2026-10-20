@@ -705,11 +705,29 @@ def _rtsp_open(cam_id):
 # ------------------------------------------------------------------ recordings (SD card)
 MAX_CLIP_SECONDS = int(os.environ.get("MAX_CLIP_SECONDS", "900"))
 MAX_DOWNLOAD_SECONDS = int(os.environ.get("MAX_DOWNLOAD_SECONDS", "10800"))
-_playback_locks = {}
+# One card playback per camera at a time. A new request from the same person (scrubbing
+# makes the browser drop the old request) or after 20 s without data takes over: the old
+# lock-based version leaked when the browser hung up before the response body started,
+# leaving the camera refusing playback (409) until a restart.
+_playback = {}               # cam_id -> {"person", "ff", "at"}
+_playback_guard = threading.Lock()
 
 
-def _plock(cam_id):
-    return _playback_locks.setdefault(cam_id, threading.Lock())
+def playback_reaper():
+    """End card playbacks that stopped sending (the browser gave up before reading
+    anything): left alone they keep the relay open, and the camera then refuses every
+    other playback, the Tapo app's included (error -52405)."""
+    while True:
+        time.sleep(10)
+        with _playback_guard:
+            stale = [(cid, p) for cid, p in _playback.items() if time.time() - p["at"] > 30]
+        for cid, p in stale:
+            log.info("ending idle playback on cam%s", cid)
+            try: p["ff"] and p["ff"].kill()
+            except Exception: pass
+            with _playback_guard:
+                if _playback.get(cid) is p:
+                    del _playback[cid]
 
 
 def _day_bounds(date):
@@ -796,9 +814,21 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
             raise HTTPException(403, "That time was in privacy mode.")
         end = min(end, int(ws_))
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
-    lock = _plock(cam_id)
-    if not lock.acquire(blocking=False):
-        raise HTTPException(409, "Someone is already playing back from this camera. Try again in a moment.")
+    mine = {"person": me["id"], "ff": None, "at": time.time()}
+    with _playback_guard:
+        cur = _playback.get(cam_id)
+        if cur and cur["person"] != me["id"] and time.time() - cur["at"] < 20:
+            raise HTTPException(409, "Someone is already playing back from this camera. Try again in a moment.")
+        _playback[cam_id] = mine
+    if cur and cur["ff"]:
+        try: cur["ff"].kill()            # stops the old pump, which hangs up its relay
+        except Exception: pass
+        await asyncio.sleep(0.5)         # give the camera a moment to free its playback session
+
+    def release():
+        with _playback_guard:
+            if _playback.get(cam_id) is mine:
+                del _playback[cam_id]
     # read from the card until we know whether it has sound, then start ffmpeg: video is
     # copied, the camera's G.711 audio becomes AAC (see audio.py); fragmented MP4 so the
     # browser can play it as it arrives
@@ -807,9 +837,10 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     try:
         pre, rest = await asyncio.get_event_loop().run_in_executor(None, audio.prime, rec, sp)
     except Exception as e:
-        rec.close(); lock.release(); log.info("clip start cam%s: %s", cam_id, e)
+        rec.close(); release(); log.info("clip start cam%s: %s", cam_id, e)
         raise HTTPException(502, "The camera did not send that footage. Try again.")
     ff, afd = audio.start_ffmpeg(sp, ["-flush_packets", "1", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"])
+    mine["ff"] = ff
 
     def feed():
         try:
@@ -826,11 +857,12 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
                 data = await loop.run_in_executor(None, ff.stdout.read, 65536)
                 if not data:
                     break
+                mine["at"] = time.time()
                 yield data
         finally:
             try: ff.kill()
             except Exception: pass
-            lock.release()
+            release()
 
     name = f"{cam['name']}-{datetime.fromtimestamp(start, TZ).strftime('%Y%m%d-%H%M%S')}.mp4".replace(" ", "_")
     headers = {"Cache-Control": "no-store"}
@@ -1459,6 +1491,7 @@ async def startup():
     threading.Thread(target=watch_loop, name="watchdog", daemon=True).start()
     threading.Thread(target=backup_loop, name="backup", daemon=True).start()
     threading.Thread(target=privacy_loop, name="privacy", daemon=True).start()
+    threading.Thread(target=playback_reaper, name="playback-reaper", daemon=True).start()
     if STREAM_SOURCE == "rtsp":
         global _rtsp
         from . import rtsp

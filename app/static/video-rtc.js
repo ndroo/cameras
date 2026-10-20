@@ -274,7 +274,7 @@ export class VideoRTC extends HTMLElement {
                 3: 'MEDIA_ERR_DECODE',
                 4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'
             };
-            this.report('video-error', {error: err ? MEDIA_ERRORS[err.code] : 'unknown', message: err ? err.message : ''});
+            if (this.wsURL) this.report('video-error', {error: err ? MEDIA_ERRORS[err.code] : 'unknown', message: err ? err.message : ''});
             console.error('[VideoRTC] Video error:', {
                 error: err ? MEDIA_ERRORS[err.code] : 'unknown',
                 message: err ? err.message : 'unknown',
