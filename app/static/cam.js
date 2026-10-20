@@ -138,7 +138,7 @@ function play(t) {
   const c = covered(n); t = n;
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
   stopLive(); live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz();
-  const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}`;
+  const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}&speed=${speed.value}`;
   clip.volume = vol; clip.muted = !sound; clip.src = url; clip.playbackRate = +speed.value;
   clip.play().catch(() => { if (!clip.muted) { clip.muted = true; clip.play().catch(() => {}); } });   // no tap yet on this page: start muted
   speed.hidden = false;
@@ -323,7 +323,11 @@ $("#cutGo").addEventListener("click", () => { status.textContent = "Preparing yo
 
 // ---------------------------------------------------------------- speed
 const speed = $("#speed");
-speed.addEventListener("change", () => { clip.playbackRate = +speed.value; try { localStorage.setItem("speed", speed.value); } catch {} });
+speed.addEventListener("change", () => {
+  clip.playbackRate = +speed.value; try { localStorage.setItem("speed", speed.value); } catch {}
+  // 1x footage arrives in real time; faster speeds need the camera's fast mode, so re-ask
+  if (S.mode === "play") play(Math.round(S.t));
+});
 try { speed.value = localStorage.getItem("speed") || "1"; } catch {}
 
 // ---------------------------------------------------------------- events list

@@ -800,7 +800,7 @@ async def recordings_json(request: Request, cam_id: int, date: str = "", month: 
 
 
 @app.get("/stream/{cam_id}/clip.mp4")
-async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download: int = 0):
+async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download: int = 0, speed: float = 1):
     """SD-card recording between two epoch times, remuxed on the fly to a
     fragmented MP4 the browser can play as it arrives."""
     me = require(request)
@@ -833,10 +833,12 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     # copied, the camera's G.711 audio becomes AAC (see audio.py); fragmented MP4 so the
     # browser can play it as it arrives
     def open_rec():
-        # -52405 = the camera is still busy with a playback (often one just abandoned);
-        # retry briefly, then fall back to real-time "playback" mode, which some cameras
-        # (a C100 here) accept while they refuse the faster "download" mode
-        for attempt, mode in enumerate(("download", "download", "download", "playback")):
+        # Watching uses real-time "playback" mode, like the Tapo app: it stops the moment we
+        # say so. "download" (3-4x) is for the download button and fast playback speeds only:
+        # the camera keeps uploading the whole range after we hang up, and answered "busy"
+        # to everything else meanwhile. -52405 = still busy: retry briefly.
+        fast = "download" if download or speed > 1 else "playback"
+        for attempt, mode in enumerate((fast, fast, fast, "playback")):
             sp = audio.Splitter()
             rec = tapo.iter_recording(mq, cam["device_id"], cloud.term, start, end, mode=mode, cloud=cloud)
             try:

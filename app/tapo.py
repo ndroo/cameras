@@ -506,9 +506,10 @@ def ptz_move(cloud, device_id, x, y):
         raise RuntimeError(f"motor error {code}")
 
 
-def _client_part(obj):
+def _client_part(obj, session_id=None):
     data = json.dumps(obj, separators=(",", ":")).encode()
-    return (b"--" + CLIENT_BOUNDARY.encode() + b"\r\nContent-Type: application/json\r\nContent-Length: "
+    extra = f"X-Session-Id: {session_id}\r\n".encode() if session_id else b""
+    return (b"--" + CLIENT_BOUNDARY.encode() + b"\r\nContent-Type: application/json\r\n" + extra + b"Content-Length: "
             + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n")
 
 
@@ -533,9 +534,12 @@ def iter_recording(mq, device_id, term, start, end, mode="download", timeout=25,
         params = {"playback": {"client_id": uid, "channels": [0, 1], "scale": "1/1", "start_time": str(int(start)),
                                "end_time": str(int(end)), "event_type": [1, 2]}, "method": "get"}
     sock.sendall(_client_part({"type": "request", "seq": 1, "params": params}))
+    session = None
+    parts = iter_parts(sock, timeout=timeout)
     try:
-        for hdr, body in iter_parts(sock, timeout=timeout):
+        for hdr, body in parts:
             ct = hdr.get("content-type", "")
+            session = session or hdr.get("x-session-id")
             if ct.startswith("video/mp2t"):
                 yield body
             elif "json" in ct:
@@ -544,6 +548,7 @@ def iter_recording(mq, device_id, term, start, end, mode="download", timeout=25,
                 except Exception:
                     continue
                 p = j.get("params", {})
+                session = session or p.get("session_id")
                 if j.get("type") == "response" and p.get("error_code", 0) != 0:
                     raise RuntimeError(f"camera refused playback: {p.get('error_code')}")
                 if j.get("type") == "notification" and (
@@ -551,5 +556,22 @@ def iter_recording(mq, device_id, term, start, end, mode="download", timeout=25,
                         or p.get("event_type") == "connection_closed"):
                     return
     finally:
+        # Tell the camera we're done, as the Tapo app does: without it the camera kept
+        # the session open for this client after we hung up, and a few abandoned scrubs
+        # later it answered "busy" (-71103 / -52405) to everything from us.
+        # Wait (briefly) for the camera to confirm, like the app; in "playback" mode that
+        # frees the card at once, while "download" keeps uploading the whole range anyway.
+        if session:
+            try:
+                sock.sendall(_client_part({"type": "request", "seq": 2, "params": {"method": "do", "stop": "null"}}, session))
+                sock.settimeout(3)
+                t0 = time.time()
+                for hdr, body in parts:
+                    if "json" in hdr.get("content-type", "") and b'"seq":2' in body.replace(b" ", b""):
+                        break
+                    if time.time() - t0 > 3:
+                        break
+            except Exception:
+                pass
         try: sock.close()
         except Exception: pass
