@@ -12,6 +12,8 @@ GET_PARAMETER keepalives. Paths are /<secret>/<camera id>.
 """
 import base64, logging, os, random, re, socket, struct, threading
 
+from .audio import G711_BOOST
+
 log = logging.getLogger("rtsp")
 
 VIDEO_TYPES = {0x1B: "H264"}
@@ -127,7 +129,9 @@ class RtpOut:
                                           pts, last and end))
         self.send(b"".join(parts))
 
-    def audio(self, data, pts):
+    def audio(self, data, pts, boost=None):
+        if boost:
+            data = data.translate(boost)
         ts = pts * self.rate // 90000
         parts = []
         for o in range(0, len(data), 1024):
@@ -275,15 +279,23 @@ class Session:
                 self.pending = []
                 for chunk in self.ts:
                     yield from self.demux.feed(chunk)
+            # go2rtc lines each track up from its own first packet, so both must start at
+            # the same moment: begin at a keyframe and drop audio from before it (the
+            # doorbell sends a burst of older video when a session opens)
+            v0 = None
             for kind, pts, data in frames():
                 if self.done:
                     break
                 if kind == "video":
                     nals = [n for n in nal_units(data) if n[0] & 0x1F != 9]     # drop access unit delimiters
+                    if v0 is None:
+                        if not any(n[0] & 0x1F == 5 for n in nals):
+                            continue
+                        v0 = pts
                     if nals:
                         v.h264(nals, pts)
-                elif a:
-                    a.audio(data, pts)
+                elif a and v0 is not None and (pts - v0) % (1 << 33) < (1 << 32):
+                    a.audio(data, pts, G711_BOOST.get(self.demux.audio[0]))
         except Exception as e:
             log.info("rtsp cam%s stream ended: %s", self.cam, e)
         finally:

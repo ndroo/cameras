@@ -44,6 +44,30 @@ _TABLES = {name: [_boost(f(i)).to_bytes(2, "little", signed=True) for i in range
            for name, f in (("alaw", _alaw), ("ulaw", _ulaw))}
 
 
+def _alaw_enc(x):
+    sign = 0x00 if x < 0 else 0x80
+    x = min(-x if x < 0 else x, 32635)
+    if x >= 256:
+        exp = x.bit_length() - 8              # 1..7
+        mant = (x >> (exp + 3)) & 0x0F
+    else:
+        exp, mant = 0, x >> 4
+    return ((exp << 4) | mant | sign) ^ 0x55
+
+
+def _ulaw_enc(x):
+    sign = 0x80 if x < 0 else 0
+    x = min(-x if x < 0 else x, 32635) + 0x84
+    exp = x.bit_length() - 8                  # 0..7
+    mant = (x >> (exp + 3)) & 0x0F
+    return ~(sign | (exp << 4) | mant) & 0xFF
+
+
+# Same boost for G.711 passed through untouched (RTSP live): byte -> boosted byte
+G711_BOOST = {"PCMA": bytes(_alaw_enc(_boost(_alaw(i))) for i in range(256)),
+              "PCMU": bytes(_ulaw_enc(_boost(_ulaw(i))) for i in range(256))}
+
+
 def _pts(pes):
     if len(pes) < 14 or pes[:3] != b"\x00\x00\x01" or not pes[7] & 0x80:
         return None
