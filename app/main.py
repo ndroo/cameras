@@ -814,16 +814,18 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
             raise HTTPException(403, "That time was in privacy mode.")
         end = min(end, int(ws_))
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
-    mine = {"person": me["id"], "ff": None, "at": time.time()}
+    mine = {"person": me["id"], "ff": None, "at": time.time(), "done": threading.Event()}
     with _playback_guard:
         cur = _playback.get(cam_id)
         if cur and cur["person"] != me["id"] and time.time() - cur["at"] < 20:
             raise HTTPException(409, "Someone is already playing back from this camera. Try again in a moment.")
         _playback[cam_id] = mine
-    if cur and cur["ff"]:
-        try: cur["ff"].kill()            # stops the old pump, which hangs up its relay
-        except Exception: pass
-        await asyncio.sleep(0.5)         # give the camera a moment to free its playback session
+    if cur:
+        if cur["ff"]:
+            try: cur["ff"].kill()        # stops the old pump, which sends the camera its stop
+            except Exception: pass
+        # the camera serves one playback at a time: wait until the old one has really ended
+        await asyncio.get_event_loop().run_in_executor(None, cur["done"].wait, 8)
 
     def release():
         with _playback_guard:
@@ -838,31 +840,34 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
         # the camera keeps uploading the whole range after we hang up, and answered "busy"
         # to everything else meanwhile. -52405 = still busy: retry briefly.
         fast = "download" if download or speed > 1 else "playback"
-        for attempt, mode in enumerate((fast, fast, fast, "playback")):
+        modes = (fast,) * 5 + ("playback",)
+        for attempt, mode in enumerate(modes):
             sp = audio.Splitter()
             rec = tapo.iter_recording(mq, cam["device_id"], cloud.term, start, end, mode=mode, cloud=cloud)
             try:
                 return (sp, rec) + audio.prime(rec, sp)
             except Exception as e:
                 rec.close()
-                if "-52405" not in str(e) or attempt == 3:
+                if "-52405" not in str(e) or attempt == len(modes) - 1:
                     raise
                 log.info("clip cam%s: camera busy (%s), retrying", cam_id, mode)
-                time.sleep(1.5)
+                time.sleep(2)
 
     try:
         sp, rec, pre, rest = await asyncio.get_event_loop().run_in_executor(None, open_rec)
     except Exception as e:
-        release(); log.info("clip start cam%s: %s", cam_id, e)
+        mine["done"].set(); release(); log.info("clip start cam%s: %s", cam_id, e)
         raise HTTPException(502, "The camera did not send that footage. Try again.")
     ff, afd = audio.start_ffmpeg(sp, ["-flush_packets", "1", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"])
     mine["ff"] = ff
 
     def feed():
         try:
-            audio.pump(rest, ff, afd, sp, pre)
+            audio.pump(rest, ff, afd, sp, pre)    # closes rec at the end, which stops the camera's session
         except Exception as e:
             log.info("clip feed cam%s: %s", cam_id, e)
+        finally:
+            mine["done"].set()
 
     t = threading.Thread(target=feed, daemon=True); t.start()
 

@@ -151,7 +151,15 @@ clip.addEventListener("waiting", () => showHint("Buffering…"));
 clip.addEventListener("loadedmetadata", () => noteAr(clip));
 clip.addEventListener("timeupdate", () => { if (S.mode === "play" && S.playing && !drag) { S.t = S.segStart + clip.currentTime; label.textContent = fmtTs(S.t); keepInView(S.t); draw(); } });
 clip.addEventListener("ended", () => { const n = nextCovered(S.segEnd + 1); if (n !== null && n < S.dayEnd) play(n); else if (S.date === today()) goLive(); else status.textContent = "End of footage for this day."; });
-clip.addEventListener("error", () => showHint("Couldn't load that part. Try another time."));
+// the camera serves one playback at a time and can be briefly busy (another viewer, or
+// one just abandoned): retry a couple of times before giving up
+let clipRetries = 0;
+clip.addEventListener("error", () => {
+  if (S.mode !== "play" || !clip.getAttribute("src")) return;
+  if (clipRetries < 2) { clipRetries++; showHint("Camera busy, retrying…"); setTimeout(() => { if (S.mode === "play") play(Math.round(S.t)); }, 2500); }
+  else showHint("Couldn't load that part. The camera may be busy; try again in a moment.");
+});
+clip.addEventListener("playing", () => { clipRetries = 0; });
 if (live.video) {
   const v = live.video; v.setAttribute("playsinline", ""); v.muted = !sound; v.controls = false;
   v.addEventListener("playing", () => { if (S.mode === "live") { hideHint(); poster.style.opacity = "0"; layout(); } });
