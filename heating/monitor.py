@@ -67,15 +67,14 @@ LEGEND_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", 
 # and a radius. A lit LED has a blown-out white core (min(R,G,B) >= 200 over most of the
 # disc); an unlit one is at most a dim colour bleed. Measured over 11 stills: ON = 0.81-0.96
 # white fraction, OFF = 0.00-0.28 (zone 2 sitting between two lit LEDs is the worst case).
-# Re-measured 2026-10-20 over 341 cycles: ON = 0.67-0.98 (the panel has dimmed), OFF = 0.00-0.49;
-# the 0.42-0.49 cases are all zone 1 bleeding between lit power and zone 2 LEDs, which the model
-# called ON 6 times out of 8 while zone 1's thermostat was not calling.
+# Zone 1 at 0.42-0.49 (seen 8 times, always with zone 2 lit) is NOT bleed: the crop shows a
+# white core and none of the green zone 1 shows when it is off, so leave it in the ambiguous band.
 ZONE_LEDS = {"power": (1129, 462), "zone1": (1129, 487), "zone2": (1129, 510),
              "zone3": (1129, 534), "zone4": (1129, 558)}
 LED_RADIUS = 8
 LED_WHITE_MIN = 200          # per-channel floor for a "white core" pixel
-LED_ON_FRAC = 0.58           # white fraction above this = ON
-LED_AMBIGUOUS = (0.53, 0.63) # inside this band -> ask Claude to confirm
+LED_ON_FRAC = 0.5            # white fraction above this = ON
+LED_AMBIGUOUS = (0.35, 0.65) # inside this band -> ask Claude to confirm
 
 # HTP UFT-series boiler, P-950EH control. Icon legend is from manual LP-542 Figure 51
 # (LCD Display). The model gets the annotated figure itself as a reference image.
