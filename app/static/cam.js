@@ -84,7 +84,7 @@ function stopLive() {
 
 function goLive() {
   S.mode = "live"; S.playing = false;
-  clip.pause(); clip.removeAttribute("src"); clip.load(); clip.hidden = true;
+  clip.pause(); clearClip(); clip.hidden = true;
   if (S.priv) return showPrivacy();
   if (live.video) { live.video.volume = vol; live.video.muted = !sound; }
   live.style.display = ""; live.src = `/stream/${D.camId}/ws`;
@@ -119,6 +119,72 @@ if (D.canPause) {
     privacyPost(fd).catch(e => { ev.target.disabled = false; err.textContent = e.message; err.hidden = false; }); });
 }
 
+// ---------------------------------------------------------------- card footage source
+// iPhones only play a plain <video src> from servers that answer byte-range requests,
+// and card footage is made on the fly (no length), so there it never played. Where the
+// browser has Apple's ManagedMediaSource (iPhone, Mac Safari) - or ?mse=1 to test - the
+// page fetches the fragmented MP4 itself and feeds it in, like live view does.
+const useMSE = "ManagedMediaSource" in window || new URLSearchParams(location.search).has("mse");
+let clipMSE = null;          // {abort} for the feed in progress
+function report(kind, detail) {
+  try { navigator.sendBeacon("/client-log", JSON.stringify(Object.assign({ kind, cam: D.camId, ua: navigator.userAgent, mse: useMSE }, detail))); } catch {}
+}
+function clearClip() {
+  if (clipMSE) { clipMSE.abort(); clipMSE = null; }
+  clip.removeAttribute("src"); clip.srcObject = null; clip.load();
+}
+function findBox(buf, type) {          // offset of a 4-char box type in the bytes, or -1
+  const t = [...type].map(c => c.charCodeAt(0));
+  for (let i = 4; i + 4 <= buf.length; i++) if (buf[i] === t[0] && buf[i + 1] === t[1] && buf[i + 2] === t[2] && buf[i + 3] === t[3]) return i;
+  return -1;
+}
+function codecsOf(head) {              // from the init segment: the real H.264 profile/level, plus AAC if present
+  if (findBox(head, "moof") < 0) return null;      // wait until the whole moov has arrived
+  const a = findBox(head, "avcC"); if (a < 0) return null;
+  const hex = n => n.toString(16).padStart(2, "0");
+  return `avc1.${hex(head[a + 5])}${hex(head[a + 6])}${hex(head[a + 7])}` + (findBox(head, "mp4a") >= 0 ? ",mp4a.40.2" : "");
+}
+function setClip(url) {
+  clearClip();
+  if (!useMSE) { clip.src = url; return; }
+  const MS = window.ManagedMediaSource || window.MediaSource, ms = new MS(), ac = new AbortController();
+  clipMSE = ac;
+  if (window.ManagedMediaSource) { clip.disableRemotePlayback = true; clip.srcObject = ms; } else clip.src = URL.createObjectURL(ms);
+  ms.addEventListener("sourceopen", async () => {
+    let sb = null, head = new Uint8Array(0), done = false;
+    const queue = [];
+    const feed = () => {
+      if (!sb || sb.updating) return;
+      const b = sb.buffered;                     // keep memory bounded on long clips
+      if (b.length && clip.currentTime - b.start(0) > 60) { try { sb.remove(b.start(0), clip.currentTime - 20); return; } catch {} }
+      if (queue.length) { try { sb.appendBuffer(queue[0]); queue.shift(); } catch (e) { if (e.name !== "QuotaExceededError") throw e; setTimeout(feed, 1000); } }
+      else if (done && ms.readyState === "open") { try { ms.endOfStream(); } catch {} }
+    };
+    try {
+      const r = await fetch(url, { signal: ac.signal });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const rd = r.body.getReader();
+      for (;;) {
+        const { done: end, value } = await rd.read();
+        if (end) break;
+        if (!sb) {
+          const h = new Uint8Array(head.length + value.length); h.set(head); h.set(value, head.length); head = h;
+          const codecs = codecsOf(head); if (!codecs) continue;
+          sb = ms.addSourceBuffer(`video/mp4; codecs="${codecs}"`);
+          sb.addEventListener("updateend", feed);
+          queue.push(head);
+        } else queue.push(value);
+        feed();
+      }
+      done = true; feed();
+    } catch (e) {
+      if (e.name === "AbortError" || ac.signal.aborted) return;
+      report("clip-mse", { message: String(e) });
+      clip.dispatchEvent(new Event("error"));
+    }
+  }, { once: true });
+}
+
 const covered = t => S.clips.find(c => c.start <= t && t < c.end);
 function snap(t) {
   // nearest moment that has footage; "now" counts as footage on today's bar
@@ -139,7 +205,7 @@ function play(t) {
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
   stopLive(); live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz();
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}&speed=${speed.value}`;
-  clip.volume = vol; clip.muted = !sound; clip.src = url; clip.playbackRate = +speed.value;
+  clip.volume = vol; clip.muted = !sound; setClip(url); clip.playbackRate = +speed.value;
   clip.play().catch(() => { if (!clip.muted) { clip.muted = true; clip.play().catch(() => {}); } });   // no tap yet on this page: start muted
   speed.hidden = false;
   modeBtn.classList.remove("live"); modeTxt.textContent = "Go live"; label.hidden = false; label.textContent = fmtTs(t);
@@ -155,7 +221,8 @@ clip.addEventListener("ended", () => { const n = nextCovered(S.segEnd + 1); if (
 // one just abandoned): retry a couple of times before giving up
 let clipRetries = 0;
 clip.addEventListener("error", () => {
-  if (S.mode !== "play" || !clip.getAttribute("src")) return;
+  if (S.mode !== "play" || !(clip.getAttribute("src") || clip.srcObject || clipMSE)) return;
+  report("clip-error", { message: clip.error ? clip.error.message : "" });
   if (clipRetries < 2) { clipRetries++; showHint("Camera busy, retrying…"); setTimeout(() => { if (S.mode === "play") play(Math.round(S.t)); }, 2500); }
   else showHint("Couldn't load that part. The camera may be busy; try again in a moment.");
 });
