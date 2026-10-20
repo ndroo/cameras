@@ -8,7 +8,7 @@ it to 16-bit PCM, laid out by its timestamps (gaps become silence) so it stays i
 with the video; ffmpeg then takes the TS (for the video) plus the PCM as a second input
 and encodes AAC, which go2rtc and browsers understand.
 """
-import os, queue, subprocess, threading
+import math, os, queue, subprocess, threading
 
 AUDIO_TYPES = {0x90: ("alaw", 8000), 0x91: ("ulaw", 16000)}
 VIDEO_TYPES = (0x1B, 0x24)
@@ -30,7 +30,17 @@ def _ulaw(b):
     return 0x84 - t if b & 0x80 else t - 0x84
 
 
-_TABLES = {name: [int(f(i)).to_bytes(2, "little", signed=True) for i in range(256)]
+# The cameras' microphones are quiet (a still room sits around -65 dB), and a browser
+# can't turn up past 100 %, so boost here. tanh is a soft limiter: quiet sounds get the
+# full gain, loud ones (someone talking right at the doorbell) round off instead of clipping.
+GAIN = 10 ** (float(os.environ.get("AUDIO_GAIN_DB", "18")) / 20)
+
+
+def _boost(x):
+    return int(round(32767 * math.tanh(GAIN * x / 32767)))
+
+
+_TABLES = {name: [_boost(f(i)).to_bytes(2, "little", signed=True) for i in range(256)]
            for name, f in (("alaw", _alaw), ("ulaw", _ulaw))}
 
 
