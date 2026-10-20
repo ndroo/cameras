@@ -832,12 +832,26 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     # read from the card until we know whether it has sound, then start ffmpeg: video is
     # copied, the camera's G.711 audio becomes AAC (see audio.py); fragmented MP4 so the
     # browser can play it as it arrives
-    sp = audio.Splitter()
-    rec = tapo.iter_recording(mq, cam["device_id"], cloud.term, start, end, cloud=cloud)
+    def open_rec():
+        # -52405 = the camera is still busy with a playback (often one just abandoned);
+        # retry briefly, then fall back to real-time "playback" mode, which some cameras
+        # (a C100 here) accept while they refuse the faster "download" mode
+        for attempt, mode in enumerate(("download", "download", "download", "playback")):
+            sp = audio.Splitter()
+            rec = tapo.iter_recording(mq, cam["device_id"], cloud.term, start, end, mode=mode, cloud=cloud)
+            try:
+                return (sp, rec) + audio.prime(rec, sp)
+            except Exception as e:
+                rec.close()
+                if "-52405" not in str(e) or attempt == 3:
+                    raise
+                log.info("clip cam%s: camera busy (%s), retrying", cam_id, mode)
+                time.sleep(1.5)
+
     try:
-        pre, rest = await asyncio.get_event_loop().run_in_executor(None, audio.prime, rec, sp)
+        sp, rec, pre, rest = await asyncio.get_event_loop().run_in_executor(None, open_rec)
     except Exception as e:
-        rec.close(); release(); log.info("clip start cam%s: %s", cam_id, e)
+        release(); log.info("clip start cam%s: %s", cam_id, e)
         raise HTTPException(502, "The camera did not send that footage. Try again.")
     ff, afd = audio.start_ffmpeg(sp, ["-flush_packets", "1", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"])
     mine["ff"] = ff
