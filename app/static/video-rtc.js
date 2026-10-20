@@ -177,6 +177,21 @@ export class VideoRTC extends HTMLElement {
     }
 
     /**
+     * Local change: tell the server when playback fails (phones keep their console to
+     * themselves). At most a few reports per player.
+     */
+    report(kind, detail) {
+        if ((this.reports = (this.reports || 0) + 1) > 5) return;
+        try {
+            navigator.sendBeacon('/client-log', JSON.stringify(Object.assign({
+                kind, ws: this.wsURL, codecs: this.mseCodecs || '', ua: navigator.userAgent,
+                managed: 'ManagedMediaSource' in window,
+                w: this.video && this.video.videoWidth, readyState: this.video && this.video.readyState,
+            }, detail)));
+        } catch (e) { /* best effort */ }
+    }
+
+    /**
      * Send message to server via WebSocket
      * @param {Object} value
      */
@@ -259,6 +274,7 @@ export class VideoRTC extends HTMLElement {
                 3: 'MEDIA_ERR_DECODE',
                 4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'
             };
+            this.report('video-error', {error: err ? MEDIA_ERRORS[err.code] : 'unknown', message: err ? err.message : ''});
             console.error('[VideoRTC] Video error:', {
                 error: err ? MEDIA_ERRORS[err.code] : 'unknown',
                 message: err ? err.message : 'unknown',
@@ -453,7 +469,23 @@ export class VideoRTC extends HTMLElement {
 
             this.mseCodecs = msg.value;
 
-            const sb = ms.addSourceBuffer(msg.value);
+            let sb;
+            try {
+                sb = ms.addSourceBuffer(msg.value);
+            } catch (e) {
+                this.report('addSourceBuffer', {message: String(e), supported: MediaSource.isTypeSupported(msg.value)});
+                throw e;
+            }
+            sb.addEventListener('error', () => this.report('sourcebuffer-error', {}));
+            let appended = 0;
+            sb.addEventListener('updateend', () => { appended++; });
+            setTimeout(() => {   // no picture 15 s after the stream started: report what we have
+                if (this.video.readyState < 2 && this.ws) {
+                    const b = sb.buffered;
+                    this.report('stuck', {appends: appended, buffered: b.length ? [b.start(0), b.end(b.length - 1)].map(x => x.toFixed(2)).join('-') : 'none',
+                        currentTime: this.video.currentTime, paused: this.video.paused, msState: ms.readyState});
+                }
+            }, 15000);
             sb.mode = 'segments'; // segments or sequence
             sb.addEventListener('updateend', () => {
                 if (!sb.updating && bufLen > 0) {

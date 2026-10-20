@@ -1419,6 +1419,16 @@ def admin_mqtt_log(request: Request):
     return JSONResponse({r["k"]: (json.loads(r["v"]) if r["v"].startswith("{") else r["v"]) for r in rows})
 
 
+@app.post("/client-log")
+async def client_log(request: Request):
+    """Playback failures reported by browsers (see report() in video-rtc.js)."""
+    if not current_person(request):
+        raise HTTPException(403)
+    body = (await request.body())[:2000].decode("utf-8", "replace")
+    log.warning("client-log %s", body)
+    return Response(status_code=204)
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "mqtt": mq.connected if mq else False}
