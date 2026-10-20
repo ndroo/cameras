@@ -137,6 +137,10 @@ class Splitter:
         gap = at - self.written
         if gap > self.rate // 4 and gap < self.rate * 30:   # dropped audio: fill with silence
             self.pcm += b"\x00\x00" * gap; self.written += gap
+        elif -self.rate * 30 < gap < -(self.rate // 4):     # camera clock runs fast: skip the overlap so sound doesn't drift ahead
+            data = data[-gap:]
+            if not data:
+                return
         t = _TABLES[self.codec]
         self.pcm += b"".join([t[x] for x in data]); self.written += len(data)
 

@@ -12,4 +12,4 @@ GO2RTC_BIN="${GO2RTC_BIN:-go2rtc}"
 "$GO2RTC_BIN" -config "$GO2RTC_CONFIG" &
 G=$!
 trap 'kill $G 2>/dev/null' EXIT INT TERM
-exec uvicorn app.main:app --host "${HOST:-0.0.0.0}" --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips='*'
+exec uvicorn app.main:app --host "${HOST:-0.0.0.0}" --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips='*' --ws-ping-timeout 60
