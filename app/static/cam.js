@@ -257,7 +257,7 @@ function draw() {
   $("#dayTitle").textContent = fmtD(S.date); $("#daySub").textContent = S.date === today() ? "today" : "";
   $("#dayNext").disabled = S.date >= today();
   const kinds = new Map(); for (const e of S.events) { const [c, n] = kindOf(e); kinds.set(n, c); }
-  $("#legend").innerHTML = `<span><i style="background:rgba(79,140,255,.45)"></i>footage</span>` + [...kinds].map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("") + (S.privacy.length ? `<span><i class="privSw"></i>privacy mode (hidden)</span>` : "") + (S.loaded && !S.clips.length ? `<span class="muted">no footage on this day</span>` : "");
+  $("#legend").innerHTML = `<span><i style="background:rgba(79,140,255,.45)"></i>footage</span>` + [...kinds].map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("") + (S.privacy.length ? `<span><i class="privSw"></i>privacy mode (hidden)</span>` : "") + (S.loaded && !S.clips.length ? `<span class="muted">${S.nocard ? "no SD card" : "no footage on this day"}</span>` : "");
 }
 let drag = null; const ptrs = new Map(); let pinch = null;
 const tAt = x => { const r = track.getBoundingClientRect(); const [a, b] = vis(); const f = Math.min(1, Math.max(0, (x - r.left) / r.width)); return Math.round(a + f * (b - a)); };
@@ -337,6 +337,7 @@ async function loadDay(key, at, attempt = 0) {
       if (/busy|71103/.test(msg) && attempt < 4) { await new Promise(res => setTimeout(res, 4000)); return loadDay(key, at, attempt + 1); }
       throw new Error(msg); }
     const j = await r.json();
+    if (j.nocard) { S.nocard = true; $("#cardInfo").textContent = "This camera has no SD card, so there's no recorded footage. Live view still works."; }
     S.date = key; S.clips = j.clips; S.events = j.events || []; S.privacy = j.privacy || []; S.dayStart = j.dayStart; S.dayEnd = j.dayEnd; S.loaded = true; view = null; $("#zoomReset").hidden = true;
     if (j.sd) { sdLoaded = true; const sd = j.sd; const size = sd.total_space === "0B" ? sd.video_total_space : sd.total_space;
       $("#cardInfo").textContent = `Card: ${size}, ${sd.free_space} free${sd.loop_record_status === "1" ? ", oldest footage is overwritten as it fills" : ""}. Footage comes straight from the card, so playback takes a few seconds to start.`; }

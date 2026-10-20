@@ -641,7 +641,10 @@ async def recordings_json(request: Request, cam_id: int, date: str = "", month: 
         if month:
             return {"dates": await loop.run_in_executor(None, _month_dates, cam, month)}
         ds, de = _day_bounds(date)
-        clips = await loop.run_in_executor(None, _clips_for_day, cam, date, ds)
+        try:
+            clips = await loop.run_in_executor(None, _clips_for_day, cam, date, ds)
+        except tapo.NoCard:
+            return {"date": date, "clips": [], "events": [], "dayStart": ds, "dayEnd": de, "privacy": [], "nocard": True}
         try:
             events = await loop.run_in_executor(None, tapo.detections_of_day, cloud, cam["device_id"], ds, de)
         except Exception as e:

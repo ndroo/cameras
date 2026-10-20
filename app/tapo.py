@@ -398,6 +398,10 @@ def recording_dates(cloud, device_id, start="20000101", end=None):
     return [d["date"] for d in _unwrap_list(res.get("search_results"))]
 
 
+class NoCard(RuntimeError):
+    """The camera has no SD card (it answers -71114), so there is no footage to list."""
+
+
 _user_ids = {}
 
 
@@ -418,6 +422,8 @@ def recordings_of_day(cloud, device_id, date):
         res = r[0] if r else {}
         if not res.get("error_code"):
             break
+        if res["error_code"] == -71114:
+            raise NoCard("no SD card")
         time.sleep(1.5)
     if res.get("error_code"):
         raise RuntimeError(f"the camera is busy (error {res['error_code']}), try again in a moment")
