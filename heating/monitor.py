@@ -5,9 +5,9 @@ vision for structured readings, and text an alert (via Twilio) if the boiler sho
 any error code or its screen is unreadable.
 
   - boiler: the P-950EH controller LCD -> temperature, mode, flame, error codes
-  - zone:   the Taco SR504-EXP panel   -> power + zones 1-4, read from PIXELS (white-core
-            fraction at each LED's fixed position); Claude is only consulted when a LED is
-            ambiguous or the power LED looks dark (panel off / camera moved)
+  - zone:   the Taco SR504-EXP panel   -> power + zones 1-4, read from PIXELS (core brightness
+            at each LED's fixed position); Claude checks per read_zone()'s trust rules and only
+            decides LEDs the pixels are unsure of (or all of them when the power LED looks dark)
 
 Each cycle appends one JSON object to <out>/readings.jsonl and mirrors the latest to
 <out>/readings_latest.json. Alert de-duplication state lives in <out>/alert_state.json
@@ -70,9 +70,17 @@ LEGEND_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", 
 ZONE_LEDS = {"power": (1129, 462), "zone1": (1129, 487), "zone2": (1129, 510),
              "zone3": (1129, 534), "zone4": (1129, 558)}
 LED_RADIUS = 8
-LED_WHITE_MIN = 200          # per-channel floor for a "white core" pixel
-LED_ON_FRAC = 0.5            # white fraction above this = ON
-LED_AMBIGUOUS = (0.35, 0.65) # inside this band -> ask Claude to confirm
+LED_WHITE_MIN = 200          # per-channel floor for a "white core" pixel (the "white" metric, kept for the log)
+# The verdict uses "core": mean of min(R,G,B) inside a radius-4 disc at the LED centre. A lit LED
+# is blown out (all channels high) even when its white blob is small; an unlit one is either dark,
+# green (zone 1 when off) or a pink glow from a lit neighbour, and in each case one channel stays low.
+# Measured 2026-10-20 over 145 stills (rulings checked by eye): ON 226-253 (the dim-but-lit zone 1
+# frames 19 Oct 09:32 and 20 Oct 11:53 are 236 and 226; their white fraction was only 0.44-0.48),
+# OFF per LED below. Zone 2 picks up pink glow from a lit zone 3, hence its higher off_max.
+LED_CORE_RADIUS = 4
+LED_CORE_ON_MIN = 226
+LED_CORE_OFF_MAX = {"power": 186, "zone1": 119, "zone2": 186, "zone3": 121, "zone4": 121}   # power: never seen off; uses zone 2's
+# A core score between an LED's off_max and LED_CORE_ON_MIN is outside anything seen so far -> ask the model.
 
 # HTP UFT-series boiler, P-950EH control. Icon legend is from manual LP-542 Figure 51
 # (LCD Display). The model gets the annotated figure itself as a reference image.
@@ -134,7 +142,9 @@ The LEDs, top to bottom, are: POWER, ZONE 1, ZONE 2, ZONE 3, ZONE 4/PRIORITY.
 IMPORTANT: light bleeds between adjacent LEDs, so a faint coloured glow does NOT mean a
 LED is on. A LED is ON only if it has a BRIGHT, near-white saturated CORE (the centre
 looks white-hot / blown-out). A dim coloured dot with no bright core is OFF (that colour
-is just bleed or ambient reflection). Report each LED."""
+is just bleed or ambient reflection). ZONE 1 shows a solid GREEN dot when it is off. A
+white core that is smaller than its neighbours' (sometimes ringed with a dark edge) is
+still ON. Report each LED."""
 
 ZONE_SCHEMA = {
     "type": "object",
@@ -277,26 +287,28 @@ def analyze(client, model, prompt, images, schema, effort="low"):
 
 def led_metrics(path):
     """Per-LED pixel stats from the full frame: fraction of 'white core' pixels and mean
-    brightness inside a small disc at each LED's fixed position."""
+    brightness inside a small disc at each LED's fixed position, plus the core score."""
     im = Image.open(path).convert("RGB"); px = im.load(); out = {}
-    r2 = LED_RADIUS * LED_RADIUS
+    r2, c2 = LED_RADIUS * LED_RADIUS, LED_CORE_RADIUS * LED_CORE_RADIUS
     for name, (cx, cy) in ZONE_LEDS.items():
-        n = w = 0; tot = 0.0
+        n = w = nc = 0; tot = core = 0.0
         for x in range(cx - LED_RADIUS, cx + LED_RADIUS + 1):
             for y in range(cy - LED_RADIUS, cy + LED_RADIUS + 1):
-                if (x - cx) ** 2 + (y - cy) ** 2 > r2: continue
+                d2 = (x - cx) ** 2 + (y - cy) ** 2
+                if d2 > r2: continue
                 if not (0 <= x < im.width and 0 <= y < im.height): continue
                 r, g, b = px[x, y]; n += 1; tot += (r + g + b) / 3
                 if min(r, g, b) >= LED_WHITE_MIN: w += 1
-        out[name] = {"white": round(w / n, 3) if n else 0.0, "mean": round(tot / n) if n else 0}
+                if d2 <= c2: nc += 1; core += min(r, g, b)
+        out[name] = {"white": round(w / n, 3) if n else 0.0, "mean": round(tot / n) if n else 0,
+                     "core": round(core / nc) if nc else 0}
     return out
 
 
 def zone_from_pixels(m):
-    """Deterministic LED verdicts + whether any LED is in the ambiguous band."""
-    reading = {k: m[k]["white"] >= LED_ON_FRAC for k in ZONE_LEDS}
-    lo, hi = LED_AMBIGUOUS
-    ambiguous = [k for k in ZONE_LEDS if lo <= m[k]["white"] <= hi]
+    """Deterministic LED verdicts + the LEDs whose core score is in the uncalibrated gap."""
+    reading = {k: m[k]["core"] >= (LED_CORE_OFF_MAX[k] + LED_CORE_ON_MIN) / 2 for k in ZONE_LEDS}
+    ambiguous = [k for k in ZONE_LEDS if LED_CORE_OFF_MAX[k] < m[k]["core"] < LED_CORE_ON_MIN]
     return reading, ambiguous
 
 
@@ -711,6 +723,102 @@ def _trust_summary(t):
             "learned_icons": sorted(t["learned_icons"])}
 
 
+# ---------------------------------------------------------------------------------------
+# Zone LEDs: pixels decide, with a trust record like the boiler's (<out>/zone_trust.json).
+#   - The model is asked when an LED's core score is in the uncalibrated gap, the power LED is
+#     dark, it's time for an audit, or (until an LED has ZONE_TRUST_FULL agreements) an LED changed.
+#   - Opus misread a dim-but-lit zone 1 (20 Oct 11:53), so it is NOT the referee here: it decides
+#     only gap LEDs (and everything when the power LED is dark, i.e. the view is suspect). A model
+#     disagreement on a clear pixel score keeps the pixels, resets that LED's streak and is logged
+#     with the image name for a human to rule on.
+# ---------------------------------------------------------------------------------------
+ZONE_TRUST_FULL = 30            # agreements per LED before state changes stop triggering a model check
+ZONE_AUDIT_SECONDS = 6 * 3600   # trusted or not, ask the model at least this often
+
+
+def _zone_trust_path(out): return os.path.join(out, "zone_trust.json")
+
+
+def load_zone_trust(out):
+    try:
+        t = json.load(open(_zone_trust_path(out)))
+    except Exception:
+        t = {}
+    t.setdefault("leds", {}); t.setdefault("model_calls", 0); t.setdefault("disagreements", [])
+    return t
+
+
+def save_zone_trust(out, t):
+    t["disagreements"] = t["disagreements"][-50:]
+    json.dump(t, open(_zone_trust_path(out), "w"), indent=1)
+
+
+def previous_zone_reading(out):
+    try:
+        return json.load(open(os.path.join(out, "readings_latest.json"))).get("zone", {}).get("reading")
+    except Exception:
+        return None
+
+
+def read_zone(client, out, p, zone_llm="auto"):
+    """Pixel verdicts for the Taco LEDs, checked by the model when the trust rules call for it.
+    Returns the result["zone"] entry."""
+    m = led_metrics(p)
+    px, gap = zone_from_pixels(m)
+    trust = load_zone_trust(out)
+    reasons = []
+    if zone_llm != "never":
+        if zone_llm == "always":
+            reasons.append("forced")
+        if gap:
+            reasons.append("core score in uncalibrated gap: " + ", ".join(f"{k} {m[k]['core']}" for k in gap))
+        if not px["power"]:
+            reasons.append("power LED dark (panel off / camera moved)")
+        prev = previous_zone_reading(out)
+        changed = [k for k in ZONE_LEDS if isinstance(prev, dict) and k in prev and bool(prev[k]) != px[k]]
+        if changed and any(trust["leds"].get(k, {}).get("streak", 0) < ZONE_TRUST_FULL for k in ZONE_LEDS):
+            reasons.append(f"building trust (under {ZONE_TRUST_FULL} agreements); changed: " + ", ".join(changed))
+        if time.time() - (trust.get("last_model_check_ts") or 0) >= ZONE_AUDIT_SECONDS:
+            reasons.append("periodic audit")
+    reading = dict(px, method="pixels",
+                   notes="core score per LED: " + ", ".join(f"{k} {m[k]['core']}" for k in ZONE_LEDS))
+    entry = {"image": os.path.basename(p), "pixels": m, "reading": reading}
+    if not reasons:
+        return entry
+    imgs = [b64_image(p, width=FULL_FRAME_WIDTH), b64_image(p, crop=ZONE_LED_CROP, zoom=4)]
+    llm, usage = analyze(client, ZONE_FALLBACK_MODEL, ZONE_PROMPT, imgs, ZONE_SCHEMA)
+    entry["usage"] = usage
+    trust["model_calls"] += 1; trust["last_model_check_ts"] = time.time()
+    reading.update(method="claude", why_llm="; ".join(reasons), pixel_verdict=dict(px))
+    if not isinstance(llm, dict) or llm.get("_error"):
+        reading["notes"] += " | model check failed (" + str((llm or {}).get("_error")) + "); pixels used"
+        save_zone_trust(out, trust)
+        return entry
+    model = {k: bool(llm.get(k)) for k in ZONE_LEDS}
+    reading["model"] = model
+    view_suspect = not px["power"]
+    decide = list(ZONE_LEDS) if view_suspect else gap      # where the model's answer is used
+    for k in decide:
+        reading[k] = model[k]
+    clash = [k for k in ZONE_LEDS if k not in decide and model[k] != px[k]]
+    for k in ZONE_LEDS:
+        if k in decide:
+            continue                                      # nothing to learn: pixels weren't sure
+        st = trust["leds"].setdefault(k, {"streak": 0, "agree": 0, "disagree": 0})
+        if k in clash:
+            st["streak"] = 0; st["disagree"] += 1
+        else:
+            st["streak"] += 1; st["agree"] += 1
+    if clash:
+        trust["disagreements"].append({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "image": os.path.basename(p),
+                                       "leds": {k: {"pixels": px[k], "model": model[k], "core": m[k]["core"]} for k in clash}})
+        reading["notes"] += " | model disagrees on " + ", ".join(clash) + " (pixels kept; check the image)"
+    if decide:
+        reading["notes"] += " | model decided " + ", ".join(decide)
+    save_zone_trust(out, trust)
+    return entry
+
+
 def previous_boiler_reading(out):
     try:
         return json.load(open(os.path.join(out, "readings_latest.json"))).get("boiler", {}).get("reading")
@@ -787,29 +895,10 @@ def cycle(client, model, out, zone_llm="auto", confirm_model=CONFIRM_MODEL_DEFAU
         result["boiler"] = {"_error": str(e)}
         log("boiler capture failed:", e)
 
-    # --- Zone controller: pixels first; Claude only if ambiguous / panel dark / forced ---
+    # --- Zone controller: pixels first; the model checks per read_zone()'s trust rules ---
     try:
         p = cap.grab_once(out, cap.CAMERAS["zone"], name="zone", opts={"frames": 8, "sharpen": False, "quality": 95})
-        m = led_metrics(p)
-        px_reading, ambiguous = zone_from_pixels(m)
-        need_llm = (zone_llm == "always") or (zone_llm == "auto" and (ambiguous or not px_reading["power"]))
-        entry = {"image": os.path.basename(p), "pixels": m}
-        if need_llm:
-            imgs = [b64_image(p, width=FULL_FRAME_WIDTH), b64_image(p, crop=ZONE_LED_CROP, zoom=4)]
-            llm, usage = analyze(client, ZONE_FALLBACK_MODEL, ZONE_PROMPT, imgs, ZONE_SCHEMA)
-            entry["usage"] = usage
-            if isinstance(llm, dict) and not llm.get("_error"):
-                llm["method"] = "claude"
-                llm["pixel_verdict"] = px_reading
-                llm["why_llm"] = ("ambiguous:" + ",".join(ambiguous)) if ambiguous else ("forced" if zone_llm == "always" else "power LED dark")
-                entry["reading"] = llm
-            else:
-                px_reading["method"] = "pixels"; px_reading["notes"] = "Claude fallback failed: " + str(llm)
-                entry["reading"] = px_reading
-        else:
-            px_reading["method"] = "pixels"
-            px_reading["notes"] = "white-core fraction per LED: " + ", ".join(f"{k} {m[k]['white']:.2f}" for k in ZONE_LEDS)
-            entry["reading"] = px_reading
+        entry = read_zone(client, out, p, zone_llm)
         result["zone"] = entry
         log("zone:  ", json.dumps(entry["reading"]))
     except Exception as e:
@@ -836,7 +925,7 @@ def main():
                     help="re-read low-confidence / error / unreadable boiler frames with this model "
                          "(medium effort); '' disables")
     ap.add_argument("--zone-llm", choices=["auto", "always", "never"], default="auto",
-                    help="zone LEDs: 'auto' = pixels, Claude only when ambiguous (default); "
+                    help="zone LEDs: 'auto' = pixels, Claude per the trust rules (default); "
                          "'always' = also ask Claude every cycle; 'never' = pixels only")
     ap.add_argument("--pixels", choices=["on", "shadow", "off"], default=PIXELS_MODE,
                     help="on: pixels read the LCD and the model verifies (default); shadow: model reads, pixels logged; off: model only")
