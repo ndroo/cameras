@@ -44,9 +44,12 @@ GO2RTC = os.environ.get("GO2RTC_URL", "http://127.0.0.1:1984")
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET") or secrets.token_hex(16)
 os.environ["INTERNAL_SECRET"] = INTERNAL_SECRET
 PIPE_CMD = os.environ.get("PIPE_CMD", "python3 -m app.pipe")
-# "http": go2rtc pulls each camera from /internal/live in this process (one thread per
-# live camera); "exec": the old way, one python pipe process per camera (app/pipe.py)
-STREAM_SOURCE = os.environ.get("STREAM_SOURCE", "http")
+# "rtsp": go2rtc pulls each camera over RTSP from this process (app/rtsp.py), keeping
+# the cameras' G.711 sound as-is (go2rtc turns it into FLAC for browsers; no ffmpeg);
+# "http": go2rtc pulls MPEG-TS from /internal/live, with an ffmpeg per camera for AAC;
+# "exec": the old way, one python pipe process per camera (app/pipe.py)
+STREAM_SOURCE = os.environ.get("STREAM_SOURCE", "rtsp")
+RTSP_PORT = int(os.environ.get("RTSP_PORT", "8554"))
 # live streams block a thread each for as long as someone watches; keep them off the
 # default executor (5 threads on this 1-CPU machine) so playback and PTZ never queue
 from concurrent.futures import ThreadPoolExecutor
@@ -483,6 +486,8 @@ def _go2rtc_yaml():
     for cam in cams:
         if STREAM_SOURCE == "exec":
             lines.append(f'  {_stream_name(cam)}: "exec:{PIPE_CMD} {cam["device_id"]}#killsignal=15#killtimeout=5"')
+        elif STREAM_SOURCE == "rtsp":
+            lines.append(f'  {_stream_name(cam)}: "rtsp://127.0.0.1:{RTSP_PORT}/{INTERNAL_SECRET}/{cam["id"]}"')
         else:
             lines.append(f'  {_stream_name(cam)}: "http://127.0.0.1:{port}/internal/live/{cam["id"]}#header=X-Internal:{INTERNAL_SECRET}"')
     return "\n".join(lines) + "\n"
@@ -651,6 +656,24 @@ async def internal_live(request: Request, cam_id: int):
             except Exception: pass
 
     return StreamingResponse(body(), media_type="video/mp2t", headers={"Cache-Control": "no-store"})
+
+
+def _rtsp_open(cam_id):
+    """Live TS from the camera for the RTSP server: (chunks, close)."""
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam or db.privacy_active(cam_id):
+        raise RuntimeError("no such camera, or privacy mode is on")
+    url, tok = mq.request_relay(cam["device_id"])
+    sock = tapo.connect_relay(url, tok, cloud.term)
+    tapo.start_preview(sock)
+    log.info("live %s: rtsp", cam["name"])
+
+    def close():
+        try: sock.shutdown(socket.SHUT_RDWR)
+        except Exception: pass
+        try: sock.close()
+        except Exception: pass
+    return tapo.iter_ts(sock), close
 
 
 # ------------------------------------------------------------------ recordings (SD card)
@@ -1400,6 +1423,9 @@ async def startup():
     threading.Thread(target=watch_loop, name="watchdog", daemon=True).start()
     threading.Thread(target=backup_loop, name="backup", daemon=True).start()
     threading.Thread(target=privacy_loop, name="privacy", daemon=True).start()
+    if STREAM_SOURCE == "rtsp":
+        from . import rtsp
+        rtsp.Server(_rtsp_open, INTERNAL_SECRET, RTSP_PORT).start()
     asyncio.create_task(_register_later())
 
 
