@@ -476,7 +476,12 @@ export class VideoRTC extends HTMLElement {
                         this.video.currentTime = start;
                     }
                     const gap = end - this.video.currentTime;
-                    this.video.playbackRate = gap > 0.1 ? gap : 0.1;
+                    // Local change: keep ~2 s in hand. Tapo's cloud relay delivers in clumps
+                    // with gaps up to ~1.6 s; upstream's rate = gap chased the live edge and
+                    // drained the buffer right before each gap, so every gap became a stall.
+                    const target = 2;
+                    this.video.playbackRate = gap > target * 3 ? 1.3 : gap > target * 1.5 ? 1.1
+                        : gap < target * 0.4 ? 0.75 : gap < target * 0.75 ? 0.9 : 1;
                     // console.debug('VideoRTC.buffered', gap, this.video.playbackRate, this.video.readyState);
                 }
             });
