@@ -274,8 +274,13 @@ button.busy{opacity:.7;cursor:progress}
 .kind.privacy_on{background:rgba(191,90,242,.28)}.kind.privacy_off{background:rgba(52,199,89,.2)}
 
 /* sound */
-.controls button.attn{background:var(--acc);color:#fff;animation:attn 1.6s ease-in-out 3}
-@keyframes attn{50%{box-shadow:0 0 0 4px rgba(79,140,255,.35)}}
+.volWrap{display:inline-flex;align-items:center;gap:6px}
+.controls button#soundBtn.on{background:var(--acc);color:#fff}
+.controls button#soundBtn.attn{background:#ff9f0a;color:#000;animation:attn 1.6s ease-in-out 3}
+@keyframes attn{50%{box-shadow:0 0 0 4px rgba(255,159,10,.35)}}
+#vol{width:96px;margin:0;padding:0;height:22px;accent-color:var(--acc);cursor:pointer;background:none;border:0}
+#vol.off{opacity:.4;filter:grayscale(1)}
+@media (max-width:640px){#vol{width:64px}}
 .wallTile{cursor:pointer}
 .wallTile.sound{box-shadow:0 0 0 2px var(--acc),0 10px 30px rgba(0,0,0,.45)}
 .wallTile .tag .snd{font-style:normal;font-size:13px}

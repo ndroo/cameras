@@ -88,7 +88,8 @@ function drawWall() {
     el.addEventListener("click", ev => {
       if (el.dataset.dragged || ev.target.closest(".open,.grip")) return;
       const vv = vs.video; if (!vv) return;
-      vv.muted = !vv.muted; if (!vv.muted) vv.play().catch(() => {});
+      let lvl = 0.8; try { const x = parseFloat(localStorage.getItem("vol")); if (x > 0 && x <= 1) lvl = x; } catch {}   // the camera page's volume
+      vv.volume = lvl; vv.muted = !vv.muted; if (!vv.muted) vv.play().catch(() => {});
       drawSnd();
     });
     tiles.set(c.id, { el, vs, lay }); lay(); enableDrag(el);

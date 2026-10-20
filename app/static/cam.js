@@ -39,21 +39,36 @@ async function saveOrient() {
   else { try { localStorage.setItem("orient:" + D.camId, JSON.stringify(o)); } catch {} }
 }
 // ---------------------------------------------------------------- sound (on by default, remembered; browsers may force a muted start)
-const soundBtn = $("#soundBtn");
-let sound = true; try { sound = localStorage.getItem("sound") !== "0"; } catch {}
+// the button toggles sound; turning it back on returns to the last volume. The slider sets
+// the level (dragging to zero mutes without forgetting the level).
+const soundBtn = $("#soundBtn"), volEl = $("#vol");
+let sound = true, vol = 0.8;
+try { sound = localStorage.getItem("sound") !== "0"; const x = parseFloat(localStorage.getItem("vol")); if (x > 0 && x <= 1) vol = x; } catch {}
 const activeVideo = () => S.mode === "live" ? live.video : clip;
+function saveSound() { try { localStorage.setItem("sound", sound ? "1" : "0"); localStorage.setItem("vol", String(vol)); } catch {} }
+function applySound() { for (const v of [live.video, clip]) if (v) { v.volume = vol; v.muted = !sound; } }
 function drawSound() {
   const v = activeVideo(), on = !!v && !v.muted, blocked = sound && !on;
-  soundBtn.textContent = on ? "🔊" : "🔇"; soundBtn.classList.toggle("attn", blocked);
+  soundBtn.textContent = !on ? "🔇" : vol < 0.34 ? "🔈" : vol < 0.67 ? "🔉" : "🔊";
+  soundBtn.classList.toggle("on", on); soundBtn.classList.toggle("attn", blocked);
   soundBtn.title = on ? "Mute" : blocked ? "Tap for sound (the browser started it muted)" : "Turn sound on";
+  if (document.activeElement !== volEl) volEl.value = sound ? Math.round(vol * 100) : 0;   // forced-muted start still shows the level
+  volEl.classList.toggle("off", !on); volEl.style.setProperty("--p", volEl.value + "%");
 }
 function setSound(on) {
-  sound = on; try { localStorage.setItem("sound", on ? "1" : "0"); } catch {}
-  for (const v of [live.video, clip]) if (v) v.muted = !on;
+  sound = on; saveSound(); applySound();
   const v = activeVideo(); if (on && v) v.play().catch(() => {});
   drawSound();
 }
-for (const v of [live.video, clip]) if (v) v.addEventListener("volumechange", drawSound);
+volEl.addEventListener("input", () => {
+  const x = +volEl.value / 100;
+  if (x > 0) vol = x;
+  sound = x > 0; saveSound(); applySound();
+  const v = activeVideo(); if (sound && v) v.play().catch(() => {});
+  drawSound();
+});
+volEl.addEventListener("change", drawSound);
+for (const v of [live.video, clip]) if (v) { v.volume = vol; v.addEventListener("volumechange", drawSound); }
 
 function showHint(txt) { hint.innerHTML = '<i class="spin"></i>' + txt; hint.style.display = ""; }
 function hideHint() { hint.style.display = "none"; }
@@ -62,7 +77,7 @@ function goLive() {
   S.mode = "live"; S.playing = false;
   clip.pause(); clip.removeAttribute("src"); clip.load(); clip.hidden = true;
   if (S.priv) return showPrivacy();
-  if (live.video) live.video.muted = !sound;
+  if (live.video) { live.video.volume = vol; live.video.muted = !sound; }
   live.style.display = ""; live.src = `/stream/${D.camId}/ws`;
   modeBtn.classList.add("live"); modeTxt.textContent = "LIVE"; label.hidden = true; speed.hidden = true;
   poster.style.opacity = ".6"; showHint("Connecting to camera…"); status.textContent = "";
@@ -115,7 +130,7 @@ function play(t) {
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
   live.src = ""; live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz();
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}`;
-  clip.muted = !sound; clip.src = url; clip.playbackRate = +speed.value;
+  clip.volume = vol; clip.muted = !sound; clip.src = url; clip.playbackRate = +speed.value;
   clip.play().catch(() => { if (!clip.muted) { clip.muted = true; clip.play().catch(() => {}); } });   // no tap yet on this page: start muted
   speed.hidden = false;
   modeBtn.classList.remove("live"); modeTxt.textContent = "Go live"; label.hidden = false; label.textContent = fmtTs(t);

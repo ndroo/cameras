@@ -28,7 +28,7 @@
     <span class="chip" id="label" hidden></span>
     <select id="speed" class="chip speed" title="Playback speed" hidden><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
     <span class="grow"></span>
-    <button type="button" data-act="sound" id="soundBtn" title="Sound">🔊</button>
+    <span class="volWrap"><button type="button" data-act="sound" id="soundBtn" title="Sound">🔊</button><input type="range" id="vol" min="0" max="100" step="1" aria-label="Volume" title="Volume"></span>
     <button type="button" id="privBtn" title="Privacy mode" hidden>🔒</button>
     <button type="button" data-act="rotate" title="Rotate 90°">⟳</button>
     <button type="button" data-act="flip_h" title="Mirror">↔</button>
