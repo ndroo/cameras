@@ -45,20 +45,11 @@ ZONE_FALLBACK_MODEL = "claude-opus-5-5"   # Sonnet twice called a dark zone-1 LE
 # Fixed-view crops (x1,y1,x2,y2) used to give the model a zoomed view of the small
 # indicators. Re-tune if a camera is moved.
 ZONE_LED_CROP = (1040, 430, 1230, 640)      # Taco status LED column
-BOILER_DISPLAY_CROP = (88, 172, 545, 300)   # the P-950EH LCD panel (reference position)
-# The boiler camera gets nudged (it shifted ~250 px on 2026-10-17 and the fixed crop then
-# showed only the left half of the LCD). locate_lcd() finds the panel in each frame by
-# normalised cross-correlation against a template cut from a reference frame at
-# BOILER_DISPLAY_CROP, and falls back to the fixed crop when the match is weak.
-# Several templates may exist (docs/lcd_template*.png, one per camera position seen so
-# far); the best-scoring one wins. Add a new one (the located crop, unpadded, grayscale)
-# after a move if the match score drops to ~0.5.
-LCD_TEMPLATE_GLOB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "lcd_template*.png")
-LCD_MATCH_MIN = 0.45     # NCC score below this -> trust the fixed crop instead. Measured:
-                         # same-position frames 0.89-1.0, after a ~270 px camera shift 0.53,
-                         # a frame with no LCD at all (the zone panel) 0.37.
-LCD_PAD = (28, 12)       # widen the located box by this much (x, y) on each side so a
-                         # slightly larger/closer LCD is not clipped at the edges
+# The boiler LCD's position comes from lcd_recal (glass corners in the frame, found again
+# automatically when the camera is moved); the model's zoom is their bounding box widened by
+# LCD_PAD (x, y) on each side.
+LCD_PAD = (28, 12)
+RECAL_PROBATION = 8      # model checks after the LCD is re-found at a new camera position (~2 h)
 PIXELS_MODE = os.environ.get("PIXELS_MODE", "on")   # on = pixel-first + model verifier; shadow = model reads, pixels logged; off = model only
 FULL_FRAME_WIDTH = 640                      # context frame sent alongside the zoom (cheap)
 LEGEND_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "fig51_legend.png")
@@ -170,85 +161,43 @@ def b64_image(path, crop=None, zoom=1, width=None):
     return "image/jpeg", base64.standard_b64encode(buf.getvalue()).decode()
 
 
-def _ncc_search(frame, tmpl, scale, centre=None, radius=0):
-    """Best zero-mean normalised cross-correlation of tmpl over frame (both PIL 'L'),
-    evaluated at 1/scale resolution. Returns (score, x, y) in that reduced frame."""
-    import numpy as np
-    f = np.asarray(frame.resize((frame.width // scale, frame.height // scale), Image.BILINEAR), dtype=np.float32)
-    t = np.asarray(tmpl.resize((tmpl.width // scale, tmpl.height // scale), Image.BILINEAR), dtype=np.float32)
-    t = t - t.mean(); tn = float(np.sqrt((t * t).sum())) or 1.0
-    th, tw = t.shape
-    if centre is None:
-        xs, ys = range(0, f.shape[1] - tw + 1), range(0, f.shape[0] - th + 1)
-    else:
-        cx, cy = centre
-        xs = range(max(0, cx - radius), min(f.shape[1] - tw, cx + radius) + 1)
-        ys = range(max(0, cy - radius), min(f.shape[0] - th, cy + radius) + 1)
-    best = (-2.0, 0, 0)
-    for y in ys:
-        rows = f[y:y + th]
-        for x in xs:
-            w = rows[:, x:x + tw]; w = w - w.mean(); d = float(np.sqrt((w * w).sum()))
-            if d == 0: continue
-            s = float((w * t).sum() / (d * tn))
-            if s > best[0]: best = (s, x, y)
-    return best
+def boiler_pixels(out, p):
+    """Pixel read of the boiler LCD at its current geometry. If the LCD no longer registers (camera
+    moved) or an admin asked for it, find the LCD again from the anchor frame (lcd_recal) and read
+    again. Returns (px, lcd) - lcd: the zoom crop, corners, and what any recalibration did."""
+    import lcd_pixels, lcd_recal
+    trust = load_trust(out)
+    learned = trust["learned_icons"] if trust.get("pixel_method") == lcd_pixels.METHOD else {}
+    g = lcd_recal.current(out)
+    px = lcd_pixels.read(p, {**g, "ref": lcd_recal.load_ref(out, g)}, learned=learned)
+    recal = None
+    forced = lcd_recal.requested(out)
+    if forced or not px.get("ok"):
+        recal = {"why": "admin request" if forced else px.get("error")}
+        try:
+            corners, stats = lcd_recal.find(out, p, g)
+        except Exception as e:
+            corners, stats = None, {"error": f"{type(e).__name__}: {str(e)[:160]}"}
+        recal.update(stats)
+        lcd_recal.clear_request(out)
+        moved = corners is not None and max(abs(a - b) for q, r in zip(corners, g["corners"]) for a, b in zip(q, r)) >= 3
+        if moved or (corners and not px.get("ok")):
+            g = lcd_recal.adopt(out, p, corners, stats, recal["why"])
+            px = lcd_pixels.read(p, {**g, "ref": lcd_recal.load_ref(out, g)}, learned=learned)
+            recal["adopted"] = True
+            log(f"boiler: LCD re-found ({recal['why']}): corners {corners}, {stats}")
+        else:
+            recal["adopted"] = False
+            log(f"boiler: LCD recalibration ({recal['why']}): " + (stats.get("error") or "position unchanged"))
+    if px.get("ok"):
+        lcd_recal.record(out, g, p, px)
+    return px, {"crop": lcd_crop(g["corners"]), "corners": g["corners"], "since": g.get("since"), "recal": recal}
 
 
-LCD_LAST = {"template": None}   # which template the last locate_lcd() matched (lcd_pixels needs it)
-
-
-def _lcd_state_path(out): return os.path.join(out, "lcd_state.json")
-
-
-def locate_lcd(path, out=None):
-    """Find the P-950EH LCD in a boiler frame. Coarse NCC search over the whole frame at
-    1/8 scale, then refine at full resolution. Returns (crop_box, score); the crop is the
-    template's size at the best match, or BOILER_DISPLAY_CROP if the match is weak or the
-    template/numpy are unavailable."""
-    try:
-        import glob
-        import numpy  # noqa: F401
-        frame = Image.open(path).convert("L")
-        score, x, y, tmpl = -2.0, 0, 0, None
-        for tp in sorted(glob.glob(LCD_TEMPLATE_GLOB)):
-            t = Image.open(tp).convert("L")
-            s8, x8, y8 = _ncc_search(frame, t, 8)
-            s, tx, ty = _ncc_search(frame, t, 1, centre=(x8 * 8, y8 * 8), radius=10)
-            if s > score:
-                score, x, y, tmpl = s, tx, ty, t
-                LCD_LAST["template"] = tp
-        if tmpl is None:
-            raise FileNotFoundError(LCD_TEMPLATE_GLOB)
-        px, py = LCD_PAD
-        crop = (max(0, x - px), max(0, y - py),
-                min(frame.width, x + tmpl.width + px), min(frame.height, y + tmpl.height + py))
-        if score < LCD_MATCH_MIN:
-            log(f"boiler: LCD match weak ({score:.2f} at {crop[:2]}), using last good crop")
-            return _last_good_crop(out), score
-        if out:
-            try:
-                json.dump({"crop": list(crop), "match": round(score, 3), "path": os.path.basename(path)},
-                          open(_lcd_state_path(out), "w"))
-            except Exception:
-                pass
-        return crop, score
-    except Exception as e:
-        log("boiler: LCD locate failed, using last good crop:", e)
-        return _last_good_crop(out), None
-
-
-def _last_good_crop(out):
-    """The crop from the last successful locate (survives a camera nudge even when numpy or
-    the templates are missing); the original fixed crop only if there has never been one."""
-    try:
-        if out:
-            c = json.load(open(_lcd_state_path(out)))["crop"]
-            if len(c) == 4:
-                return tuple(int(v) for v in c)
-    except Exception:
-        pass
-    return BOILER_DISPLAY_CROP
+def lcd_crop(corners):
+    """The model's LCD zoom: the glass corners' bounding box widened by LCD_PAD."""
+    xs, ys = [q[0] for q in corners], [q[1] for q in corners]
+    return [max(0, int(min(xs)) - LCD_PAD[0]), max(0, int(min(ys)) - LCD_PAD[1]), int(max(xs)) + LCD_PAD[0], int(max(ys)) + LCD_PAD[1]]
 
 
 def b64_file(path):
@@ -510,10 +459,17 @@ PX_FIELD_MAP = {"flame_on": "flame", "fan_on": "fan", "boiler_pump": "boiler_pum
 PROVISIONAL_FIELDS = {"dhw_icon": "dhw_box", "dhw_pump": "dhw_pump", "sun_icon": "sun", "snowflake_icon": "snowflake",
                       "info_icon": "info", "wrench_icon": "wrench"}
 ALERT_ON_PIXEL_MISS = ("mode", "temperature")   # arbiter siding with the model on these -> alert
-# Icons behind PIXEL_FIELDS. A score that lands between the calibrated off_max and on_min is
+# Icons behind PIXEL_FIELDS. A score that lands well inside the calibrated off_max..on_min gap is
 # outside anything seen at calibration (drift, glare, a half-lit segment) - ask the model even
 # when the field is trusted.
 GAP_ICONS = ("radiator", "dhw_box", "flame", "boiler_pump", "ch_pump")
+
+
+def _in_gap(score, off_max, on_min):
+    """Score in the middle half of the calibrated off..on gap. The whole gap was too wide: off_max is
+    0.0 for several icons, so a single glare pixel (0.001) asked the model (2 of 9 frames, 2026-10-21)."""
+    q = (on_min - off_max) / 4
+    return off_max + q < score < on_min - q
 
 
 def _trust_path(out): return os.path.join(out, "lcd_trust.json")
@@ -559,12 +515,14 @@ def verify_reasons(px, cur, prev, trust):
         icons = lcd_pixels._calib()["icons"]
         gap = [f"{n} {px['scores'][n]}" for n in GAP_ICONS
                if n in px.get("scores", {}) and icons[n].get("off_max") is not None and icons[n].get("on_min") is not None
-               and icons[n]["off_max"] < px["scores"][n] < icons[n]["on_min"]]
+               and _in_gap(px["scores"][n], icons[n]["off_max"], icons[n]["on_min"])]
         if gap:
             reasons.append("pixel score between calibrated off/on ranges: " + ", ".join(gap))
     lit_prov = [n for n in px.get("provisional", []) if px.get(n)]
     if lit_prov:
         reasons.append("unconfirmed icon lit: " + ", ".join(lit_prov))
+    if trust.get("probation"):
+        reasons.append(f"LCD re-found after a camera move ({trust['probation']} check(s) left)")
     untrusted = [f for f in PIXEL_FIELDS if trust["fields"].get(f, {}).get("streak", 0) < TRUST_FULL]
     if untrusted:
         reasons.append(f"building trust ({len(untrusted)} field(s) under {TRUST_FULL} agreements)")
@@ -589,7 +547,7 @@ def _field_equal(f, a, b):
     return bool(a) == bool(b)
 
 
-def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_base):
+def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
     """Pixel-first reading verified by the model. Returns (reading, usage, px, trust_summary)."""
     import lcd_pixels
     trust = load_trust(out); trust["cycles"] += 1
@@ -602,10 +560,13 @@ def read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs_
                                                     "fields": trust["fields"], "learned_icons": trust["learned_icons"]})
         trust["fields"] = {}; trust["learned_icons"] = {}; trust["pixel_method"] = lcd_pixels.METHOD
     usage = {"model": None, "input": 0, "output": 0, "cache_read": 0}
-    px = lcd_pixels.read(p, lcd_crop, LCD_LAST.get("template"), learned=trust["learned_icons"])
+    if (lcd.get("recal") or {}).get("adopted"):
+        trust["probation"] = RECAL_PROBATION
     cur = px_as_reading(px)
     prev = previous_boiler_reading(out)
     reasons = verify_reasons(px, cur, prev, trust)
+    if trust.get("probation") and px.get("ok"):
+        trust["probation"] -= 1
     cur["source"] = {"pixels": list(PIXEL_FIELDS), "model": [], "reasons": reasons, "verified_by": None, "arbiter": None}
     if not reasons:
         cur["confidence"] = "high" if px.get("ok") else "low"
@@ -868,12 +829,22 @@ def cycle(client, model, out, zone_llm="auto", confirm_model=CONFIRM_MODEL_DEFAU
         imgs = []
         if os.path.exists(LEGEND_IMAGE):
             imgs.append(b64_file(LEGEND_IMAGE))
-        lcd_crop, lcd_score = locate_lcd(p, out)
-        imgs += [b64_image(p, width=FULL_FRAME_WIDTH), b64_image(p, crop=lcd_crop, zoom=3)]
-        px = trust_summary = None
+        px = trust_summary = lcd = None
+        if PIXELS_MODE != "off":
+            try:
+                px, lcd = boiler_pixels(out, p)
+            except Exception as e:
+                log("boiler: pixel read failed:", repr(e))
+                px, lcd = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}, None
+        if not lcd:
+            import lcd_recal   # the zoom still needs the last known position
+            lcd = {"crop": lcd_crop(lcd_recal.current(out)["corners"])}
+        imgs += [b64_image(p, width=FULL_FRAME_WIDTH), b64_image(p, crop=tuple(lcd["crop"]), zoom=3)]
         if PIXELS_MODE == "on":
             try:
-                reading, usage, px, trust_summary = read_boiler(client, model, confirm_model, out, p, lcd_crop, lcd_score, imgs)
+                if px.get("seg_values") is None and px.get("error"):
+                    raise RuntimeError(px["error"])
+                reading, usage, px, trust_summary = read_boiler(client, model, confirm_model, out, p, px, lcd, imgs)
                 log("boiler pixels:", json.dumps({k: px.get(k) for k in ("mode", "flame", "fan", "boiler_pump", "ch_pump", "temperature_f", "ok", "register")}))
                 log("boiler trust:", json.dumps(trust_summary))
             except Exception as e:
@@ -910,15 +881,9 @@ def cycle(client, model, out, zone_llm="auto", confirm_model=CONFIRM_MODEL_DEFAU
                 reading["temperature"] = None
                 reading["confidence"] = "low"
         result["boiler"] = {"image": os.path.basename(p), "reading": reading, "usage": usage,
-                            "lcd": {"crop": list(lcd_crop), "match": None if lcd_score is None else round(lcd_score, 3)}}
-        if PIXELS_MODE == "shadow":
-            try:
-                import lcd_pixels
-                px = lcd_pixels.read(p, lcd_crop, LCD_LAST.get("template"))
-            except Exception as e:
-                px = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}
+                            "lcd": lcd}
         if px is not None:
-            result["boiler"]["pixels"] = {k: px.get(k) for k in ("ok", "error", "mode", "flame", "fan", "boiler_pump", "ch_pump", "dhw_box", "dhw_pump", "temperature_f", "register", "scores", "provisional") if k in px}
+            result["boiler"]["pixels"] = {k: px.get(k) for k in ("ok", "error", "mode", "flame", "fan", "boiler_pump", "ch_pump", "dhw_box", "dhw_pump", "temperature_f", "register", "scores", "seg_values", "provisional") if k in px}
         if trust_summary:
             result["boiler"]["trust"] = trust_summary
         log("boiler:", json.dumps(reading))

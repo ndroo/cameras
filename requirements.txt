@@ -14,3 +14,4 @@ cryptography>=42
 pyotp>=2.9
 numpy>=1.24
 boto3>=1.34
+opencv-python-headless>=4.10
