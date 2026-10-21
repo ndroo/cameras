@@ -4,46 +4,7 @@
   220
  ],
  "pad": 6,
- "corners": {
-  "lcd_template.png": [
-   [
-    44,
-    21
-   ],
-   [
-    340,
-    34
-   ],
-   [
-    320,
-    143
-   ],
-   [
-    24,
-    117
-   ]
-  ],
-  "lcd_template2.png": [
-   [
-    24,
-    44
-   ],
-   [
-    333,
-    39
-   ],
-   [
-    320,
-    145
-   ],
-   [
-    12,
-    139
-   ]
-  ]
- },
  "ref": "lcd_flat_ref.png",
- "off": "lcd_flat_off.png",
  "mask_exclude": [
   [
    290,
@@ -67,9 +28,9 @@
     243,
     93
    ],
-   "thr": 38.9,
-   "on_min": 45.8,
-   "off_max": 32.0
+   "thr": 0.248,
+   "on_min": 0.497,
+   "off_max": 0.0
   },
   "flame": {
    "box": [
@@ -78,9 +39,9 @@
     600,
     100
    ],
-   "thr": 25.9,
-   "on_min": 30.0,
-   "off_max": 21.8
+   "thr": 0.212,
+   "on_min": 0.424,
+   "off_max": 0.0
   },
   "fan": {
    "box": [
@@ -89,9 +50,9 @@
     554,
     97
    ],
-   "thr": 27.8,
-   "on_min": 31.6,
-   "off_max": 23.9
+   "thr": 0.216,
+   "on_min": 0.432,
+   "off_max": 0.0
   },
   "boiler_pump": {
    "box": [
@@ -100,9 +61,9 @@
     563,
     138
    ],
-   "thr": 31.0,
-   "on_min": 41.1,
-   "off_max": 20.9
+   "thr": 0.339,
+   "on_min": 0.674,
+   "off_max": 0.003
   },
   "ch_pump": {
    "box": [
@@ -111,9 +72,9 @@
     614,
     141
    ],
-   "thr": 37.6,
-   "on_min": 44.5,
-   "off_max": 30.7
+   "thr": 0.26,
+   "on_min": 0.517,
+   "off_max": 0.003
   },
   "house": {
    "box": [
@@ -122,8 +83,8 @@
     256,
     34
    ],
-   "thr": 23.0,
-   "on_min": 33.0,
+   "thr": 0.262,
+   "on_min": 0.524,
    "off_max": null
   },
   "comm": {
@@ -133,8 +94,8 @@
     612,
     60
    ],
-   "thr": 10.6,
-   "on_min": 20.6,
+   "thr": 0.271,
+   "on_min": 0.542,
    "off_max": null
   },
   "sun": {
@@ -144,9 +105,10 @@
     73,
     20
    ],
-   "thr": 32.3,
-   "off_max": 20.3,
-   "provisional": true
+   "thr": 0.533,
+   "off_max": 0.283,
+   "provisional": true,
+   "on_min": null
   },
   "snowflake": {
    "box": [
@@ -155,9 +117,10 @@
     304,
     38
    ],
-   "thr": 25.5,
-   "off_max": 13.5,
-   "provisional": true
+   "thr": 0.661,
+   "off_max": 0.411,
+   "provisional": true,
+   "on_min": null
   },
   "dhw_box": {
    "box": [
@@ -166,9 +129,9 @@
     344,
     46
    ],
-   "thr": 19.5,
-   "on_min": 31.8,
-   "off_max": 7.2
+   "thr": 0.436,
+   "on_min": 0.757,
+   "off_max": 0.115
   },
   "info": {
    "box": [
@@ -177,9 +140,10 @@
     408,
     44
    ],
-   "thr": 20.5,
-   "off_max": 8.5,
-   "provisional": true
+   "thr": 0.543,
+   "off_max": 0.293,
+   "provisional": true,
+   "on_min": null
   },
   "wrench": {
    "box": [
@@ -188,9 +152,10 @@
     557,
     46
    ],
-   "thr": 22.6,
-   "off_max": 10.6,
-   "provisional": true
+   "thr": 0.382,
+   "off_max": 0.132,
+   "provisional": true,
+   "on_min": null
   },
   "dhw_pump": {
    "box": [
@@ -199,9 +164,9 @@
     582,
     164
    ],
-   "thr": 14.6,
-   "on_min": 24.8,
-   "off_max": 4.4
+   "thr": 0.301,
+   "on_min": 0.595,
+   "off_max": 0.007
   }
  },
  "digits": {
@@ -212,8 +177,7 @@
     "w": 40,
     "h": 78,
     "t": 8,
-    "sk": 4,
-    "thr": 30
+    "sk": 4
    },
    {
     "x": 371,
@@ -221,8 +185,7 @@
     "w": 44,
     "h": 82,
     "t": 10,
-    "sk": 4,
-    "thr": 30
+    "sk": 4
    },
    {
     "x": 423,
@@ -230,10 +193,39 @@
     "w": 42,
     "h": 82,
     "t": 12,
-    "sk": 4,
-    "thr": 30
+    "sk": 4
    }
-  ]
+  ],
+  "note": "Segment boxes per digit cell in the flat image. Cut-offs are learned per camera position (lcd_pixels.learn_seg_thr)."
  },
- "calibrated": "2026-10-17 from 60 frames 2026-10-16T02:23Z..2026-10-17T14:43Z; thresholds re-centred and DHW boxes placed 2026-10-20 from 146 frames 2026-10-18T21Z..2026-10-20T20Z"
+ "calibrated": "2026-10-17 from 60 frames 2026-10-16T02:23Z..2026-10-17T14:43Z; thresholds re-centred and DHW boxes placed 2026-10-20 from 146 frames 2026-10-18T21Z..2026-10-20T20Z; icons switched to glass_share and per-segment digit cut-offs added 2026-10-20",
+ "icon_method": {
+  "type": "glass_share",
+  "darker": 0.15,
+  "pad": 8,
+  "glass_pct": 80,
+  "note": "score = share of box pixels at least 15% darker than the glass around the box (80th percentile of the box padded by 8 px), in the same frame. Calibrated 2026-10-20 from 146 frames 2026-10-18T21Z..2026-10-20T20Z."
+ },
+ "anchor": {
+  "image": "lcd_anchor.jpg",
+  "corners": [
+   [
+    350,
+    215
+   ],
+   [
+    659,
+    210
+   ],
+   [
+    646,
+    316
+   ],
+   [
+    338,
+    310
+   ]
+  ],
+  "note": "Starting point for lcd_recal: frame 2026-10-21 19:11 UTC (position used since 2026-10-17) and its glass corners. Once lcd_recal has adopted a position, <out>/lcd_geom.json and <out>/lcd_anchor.jpg take over."
+ }
 }

@@ -1216,6 +1216,16 @@ def admin_heating_run(request: Request):
     return RedirectResponse("/admin?msg=Heating+cycle+started", status_code=303)
 
 
+@app.post("/admin/heating/recalibrate")
+def admin_heating_recalibrate(request: Request):
+    """Find the boiler LCD again (after the camera was moved) on a cycle that starts now."""
+    require(request, admin=True)
+    os.makedirs(HEATING_OUT, exist_ok=True)
+    open(os.path.join(HEATING_OUT, "lcd_recalibrate"), "w").close()
+    threading.Thread(target=heating_cycle, daemon=True).start()
+    return RedirectResponse("/admin?msg=Boiler+LCD+recalibration+started+(result+in+about+a+minute)", status_code=303)
+
+
 # ------------------------------------------------------------------ watchdog for the other sites
 WATCH_URLS = [u.strip() for u in os.environ.get("WATCH_URLS", "https://180beatrice.andrewmcgrath.info/,https://andrewmcgrath.info/").split(",") if u.strip()]
 WATCH_EVERY = int(os.environ.get("WATCH_EVERY", "300"))
@@ -1333,9 +1343,15 @@ def admin(request: Request, msg: str = ""):
     for r in db.q("SELECT k, v FROM kv WHERE k LIKE 'watch:%'"):
         j = json.loads(r["v"]); j["url"] = r["k"][6:]; watch.append(j)
     backup = json.loads(db.kv_get("backup:last") or "null")
+    try:
+        g = json.load(open(os.path.join(HEATING_OUT, "lcd_geom.json")))
+        lcd = {"since": g.get("since"), "how": g.get("how"),
+               "pending": os.path.exists(os.path.join(HEATING_OUT, "lcd_recalibrate"))}
+    except Exception:
+        lcd = None
     return render(request, "admin.html", houses=houses, cams=cams, people=people, groups=groups, members=members,
                   gcams=gcams, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
-                  heating=_heating_state, watch=watch, backup=backup)
+                  heating=_heating_state, watch=watch, backup=backup, lcd=lcd)
 
 
 @app.post("/admin/house")

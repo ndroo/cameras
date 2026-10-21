@@ -2,14 +2,22 @@
 lcd_pixels.py - read the P-950EH boiler LCD from pixels, no model.
 
 Pipeline (all numpy + Pillow):
-  1. The caller locates the LCD (monitor.locate_lcd -> crop box + which template matched).
-  2. The crop is perspective-warped to a flat 640x220 grayscale rectangle using the glass
-     corners calibrated for that template (docs/lcd_calib.json).
-  3. The flat image is registered (+-6 px) against docs/lcd_flat_ref.png so a small camera
-     nudge does not move the icon boxes.
-  4. Darkness = (all-off reference docs/lcd_flat_off.png) - (frame): dirt, ghost segments and
-     lighting gradients cancel. Each icon is "lit" when its box's mean darkness exceeds its
-     calibrated threshold; the three temperature digits are decoded as slanted 7-segment cells.
+  1. The caller passes the LCD geometry (lcd_recal.current): the glass corners in the full frame
+     and the flat reference taken at that camera position. lcd_recal finds them again on its own
+     when the camera is moved.
+  2. The frame is perspective-warped to a flat 640x220 grayscale rectangle using those corners.
+  3. The flat image is registered (+-6 px) against the reference so a small camera nudge does
+     not move the icon boxes.
+  4. Icons: score = share of the box's pixels at least 15% darker than the glass around the box
+     in the same frame (calib "icon_method"). This replaced darkness against the stored all-off
+     photo on 2026-10-20: lighting changes made that reference stale (unlit icons scored 9-22 and
+     lit ones drifted 10-20% lower in three days); unlit icons now score 0.00.
+     Digits: contrast = how much darker each segment is than the brightest glass around it (in %),
+     decoded as slanted 7-segment cells. Each segment's cut-off is learned from its own history at
+     the current camera position (learn_seg_thr: lit and unlit form two clusters); until a segment
+     has shown both states, it is lit when it is at least half as dark as the darkest segment of
+     its digit (and above DIGIT_MIN). This replaced darkness against a stored all-off photo on
+     2026-10-21: that photo only fits one camera position, and the camera gets moved.
 
 Calibration (2026-10-17, 60 frames): every icon separable with a wide margin; temperature
 exact on 59/60. Icons that never lit in that period (sun, snowflake, DHW box, [i], wrench,
@@ -30,7 +38,6 @@ def _calib():
     if "c" not in _cache:
         c = json.load(open(CALIB))
         c["_ref"] = np.asarray(Image.open(os.path.join(HERE, "docs", c["ref"])).convert("L"), dtype=np.float32)
-        c["_off"] = np.asarray(Image.open(os.path.join(HERE, "docs", c["off"])).convert("L"), dtype=np.float32)
         m = np.ones(c["_ref"].shape, bool)
         for x0, y0, x1, y1 in c["mask_exclude"]:
             m[y0:y1, x0:x1] = False
@@ -45,19 +52,16 @@ def _persp(src, dst):
         A.append([0, 0, 0, x, y, 1, -v * x, -v * y]); b.append(v)
     return np.linalg.solve(np.array(A, float), np.array(b, float))
 
-def flatten(path, crop, template):
-    """Flat 640x220 grayscale LCD for a frame, given its located crop and the matched template name."""
+def flatten(path, corners):
+    """Flat 640x220 grayscale LCD for a frame, given the glass corners (TL, TR, BR, BL) in the full frame."""
     c = _calib(); W, H = c["out_size"]; p = c["pad"]
-    corners = c["corners"].get(os.path.basename(template) if template else "", None)
-    if corners is None:
-        raise KeyError(f"no LCD corners calibrated for template {template!r}")
-    g = Image.open(path).convert("L").crop(tuple(crop))
+    g = Image.open(path).convert("L")
     dst = [(p, p), (W - p, p), (W - p, H - p), (p, H - p)]
     return g.transform((W, H), Image.PERSPECTIVE, tuple(_persp([tuple(q) for q in corners], dst)), Image.BICUBIC)
 
-def register(a, r=6):
+def register(a, ref=None, r=6):
     """(ncc, dx, dy): shift that best aligns frame `a` to the reference on the static regions."""
-    c = _calib(); ref, m = c["_ref"], c["_mask"]; y = ref[m] - ref[m].mean(); yy = float((y * y).sum())
+    c = _calib(); m = c["_mask"]; ref = c["_ref"] if ref is None else ref; y = ref[m] - ref[m].mean(); yy = float((y * y).sum())
     best = None
     for dy in range(-r, r + 1):
         for dx in range(-r, r + 1):
@@ -75,30 +79,77 @@ def _seg_boxes(x, y, w, h, t, sk):
             (X(m)+t, m-t//2, X(m)+w-t, m+t//2)]
     return [tuple(int(round(v)) for v in s) for s in segs]
 
-def _cell(dark, c):
-    vals = [float(dark[y0:y1, x0:x1].mean()) for (x0, y0, x1, y1) in _seg_boxes(c["x"], c["y"], c["w"], c["h"], c["t"], c["sk"])]
-    segs = tuple(1 if v > c["thr"] else 0 for v in vals)
-    return ("blank" if segs == (0,) * 7 else DIG.get(segs, "?")), segs, [round(v) for v in vals]
+DIGIT_MIN = 20.0    # % darker than the glass: never lit below this (unlit segments measured 2-28, lit 21-63)
+DIGIT_FRAC = 0.5    # no learned cut-off yet: lit if at least this share of the digit's darkest segment
+                    # (replay 2026-10-21: 171/184 frames exact and none wrong from a cold start; 0.55 lost the new view)
 
-def read(path, crop, template, learned=None):
+def contrast(a, k=31):
+    """Per pixel, % darker than the brightest glass within k px (the LCD background in this frame)."""
+    im = Image.fromarray(a.clip(0, 255).astype("uint8")).filter(ImageFilter.GaussianBlur(1))
+    bg = np.asarray(im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.BoxBlur(k // 2)), dtype=np.float32)
+    return 100 * (bg - a) / np.maximum(bg, 1)
+
+def seg_values(con):
+    """Contrast of all 21 segments, keyed "0a".."2g" (cell 0 = hundreds)."""
+    out = {}
+    for i, cc in enumerate(_calib()["digits"]["cells"]):
+        for j, (x0, y0, x1, y1) in enumerate(_seg_boxes(cc["x"], cc["y"], cc["w"], cc["h"], cc["t"], cc["sk"])):
+            out[f"{i}{'abcdefg'[j]}"] = float(con[y0:y1, x0:x1].mean())
+    return out
+
+def learn_seg_thr(hist):
+    """{seg: cut-off} for the segments whose history splits cleanly into an unlit and a lit cluster
+    (between-cluster distance >= 3x the clusters' spread, and a gap of >= 4 between them)."""
+    out = {}
+    for k, vals in (hist or {}).items():
+        v = np.sort(np.asarray(vals[-300:], dtype=float)); best = None
+        if len(v) < 8:
+            continue
+        for i in range(3, len(v) - 2):
+            lo, hi = v[:i], v[i:]
+            s = (hi.mean() - lo.mean()) / (lo.std() + hi.std() + 1)
+            if best is None or s > best[0]:
+                best = (s, (lo[-1] + hi[0]) / 2, hi[0] - lo[-1])
+        if best and best[0] >= 3 and best[2] >= 4:
+            out[k] = round(float(best[1]), 1)
+    return out
+
+def _cell(i, vals, seg_thr):
+    v = [vals[f"{i}{s}"] for s in "abcdefg"]
+    fallback = max(DIGIT_MIN, DIGIT_FRAC * max(v))
+    segs = tuple(1 if x > seg_thr.get(f"{i}{s}", fallback) else 0 for x, s in zip(v, "abcdefg"))
+    return ("blank" if segs == (0,) * 7 else DIG.get(segs, "?")), segs, [round(x) for x in v]
+
+METHOD = "glass_share-v1+seg_contrast-v1"   # bump when scores change meaning: monitor resets trust and learned icons
+
+
+def icon_score(a, box, m):
+    """Share of the box's pixels at least m["darker"] darker than the surrounding glass."""
+    x0, y0, x1, y1 = box; p = m["pad"]
+    glass = float(np.percentile(a[max(0, y0 - p):y1 + p, max(0, x0 - p):x1 + p], m["glass_pct"]))
+    return float((a[y0:y1, x0:x1] < (1 - m["darker"]) * glass).mean())
+
+
+def read(path, geom, learned=None):
     """Full pixel read. Returns a dict; 'ok' False with 'error' if the frame can't be trusted.
-    learned: {icon_name: {"thr": float}} promotions confirmed in production (overrides the
-    provisional calibration for that icon)."""
+    geom: {"corners": glass corners in the frame, "ref": flat reference (array, None = docs),
+    "seg_thr": learned digit cut-offs}. learned: {icon_name: {"thr": float}} promotions confirmed
+    in production (overrides the provisional calibration for that icon)."""
     c = _calib(); learned = learned or {}
-    flat = np.asarray(flatten(path, crop, template), dtype=np.float32)
-    ncc, dx, dy = register(flat)
+    flat = np.asarray(flatten(path, geom["corners"]), dtype=np.float32)
+    ncc, dx, dy = register(flat, geom.get("ref"))
     out = {"ok": True, "register": {"ncc": round(ncc, 3), "dx": dx, "dy": dy}, "scores": {}, "provisional": []}
     if ncc < c["min_ncc"]:
         out.update(ok=False, error=f"LCD does not match the reference (ncc {ncc:.2f}) - camera moved, dark, or screen off")
     a = np.roll(np.roll(flat, -dy, 0), -dx, 1)
-    dark = c["_off"] - a
     for name, ic in c["icons"].items():
-        x0, y0, x1, y1 = ic["box"]; v = float(dark[y0:y1, x0:x1].mean())
+        v = icon_score(a, ic["box"], c["icon_method"])
         thr = learned.get(name, {}).get("thr", ic["thr"])
-        out["scores"][name] = round(v, 1); out[name] = bool(v > thr)
+        out["scores"][name] = round(v, 3); out[name] = bool(v > thr)
         if ic.get("provisional") and name not in learned:
             out["provisional"].append(name)
-    cells = [_cell(dark, cc) for cc in c["digits"]["cells"]]
+    out["seg_values"] = {k: round(v, 1) for k, v in seg_values(contrast(a)).items()}
+    cells = [_cell(i, out["seg_values"], geom.get("seg_thr") or {}) for i in range(len(c["digits"]["cells"]))]
     out["digit_cells"] = [{"digit": d, "segs": s, "values": v} for d, s, v in cells]
     digs = [d for d, _, _ in cells]
     if "?" in digs or digs[2] == "blank" or (digs[1] == "blank" and digs[0] != "blank"):
