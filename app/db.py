@@ -45,7 +45,12 @@ MIGRATIONS = [
     "ALTER TABLE people ADD COLUMN passcode_hash TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS people_email ON people(email)",
     "ALTER TABLE cameras ADD COLUMN ptz INTEGER",   # NULL until probed; 1 = can pan/tilt
+    "ALTER TABLE group_members ADD COLUMN muted TEXT DEFAULT ''",   # comma list of ALERT_KINDS this member opted out of
+    "ALTER TABLE cameras ADD COLUMN down_since REAL",   # first failed check of the current outage
+    "ALTER TABLE cameras ADD COLUMN offline_alerted INTEGER DEFAULT 0",   # 1 once the offline text went out
 ]
+
+ALERT_KINDS = ("doorbell", "tamper", "offline", "motion")
 
 
 def connect():
@@ -123,17 +128,21 @@ def can_view(person, camera_id):
 
 def recipients_for(camera_id, kind):
     """People to text for an event on this camera: members of groups that cover the
-    camera and have the matching notify flag."""
-    flag = {"doorbell": "notify_doorbell", "tamper": "notify_tamper", "offline": "notify_offline",
-            "online": "notify_offline", "motion": "notify_motion"}.get(kind)
-    if not flag:
+    camera and have the matching notify flag, minus members who muted that kind."""
+    base = "offline" if kind == "online" else kind
+    if base not in ALERT_KINDS:
         return []
     return q(f"""SELECT DISTINCT p.* FROM people p
                  JOIN group_members gm ON gm.person_id=p.id
-                 JOIN groups g ON g.id=gm.group_id AND g.{flag}=1
+                 JOIN groups g ON g.id=gm.group_id AND g.notify_{base}=1
                  JOIN cameras c ON c.id=? AND c.house_id=g.house_id
                  LEFT JOIN group_cameras gc ON gc.group_id=g.id AND gc.camera_id=c.id
-                 WHERE g.all_cameras=1 OR gc.camera_id IS NOT NULL""", camera_id)
+                 WHERE (g.all_cameras=1 OR gc.camera_id IS NOT NULL)
+                   AND instr(',' || COALESCE(gm.muted, '') || ',', ',' || ? || ',') = 0""", camera_id, base)
+
+
+def muted_set(s):
+    return {k for k in (s or "").split(",") if k in ALERT_KINDS}
 
 
 # ------------------------------------------------------------------ privacy mode

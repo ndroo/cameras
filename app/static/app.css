@@ -324,3 +324,4 @@ html{overflow-x:clip}
   .wallTile .tag .open{padding:2px 5px;font-size:12px}
   .wallTile .tag .grip{padding:2px 4px;font-size:13px}
 }
+.rcv{border-collapse:collapse;margin-top:4px}.rcv th{font-weight:normal;color:var(--muted);padding:2px 4px}.rcv td{padding:2px 4px;text-align:center}.rcv td:first-child{text-align:left;color:var(--fg)}

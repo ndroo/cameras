@@ -25,6 +25,7 @@ Usage:
 """
 import argparse, base64, json, os, sys, time, traceback
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import grab_boiler_cloud as cap  # reuse the capture pipeline (also loads .env)
 from grab_boiler_cloud import load_dotenv
@@ -215,7 +216,8 @@ def analyze(client, model, prompt, images, schema, effort="low"):
     usage = {}
     try:
         resp = client.messages.create(
-            model=model, max_tokens=1024,
+            # roomy: at effort "medium" Opus can think past 1024 tokens and the JSON gets cut off
+            model=model, max_tokens=4096,
             output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": content}],
         )
@@ -339,7 +341,7 @@ def boiler_problems(reading):
 
 def log_alert(out, result, kind, message, problems, delivery, sid="", error=""):
     """Append one line to alerts.jsonl - the durable, auditable alert history.
-    kind: problem | cleared | suppressed. delivery: sent | failed | not_configured | suppressed."""
+    kind: problem | cleared | suppressed | held. delivery: sent | failed | not_configured | suppressed | held."""
     rec = {"timestamp": result.get("timestamp"), "local": result.get("local"),
            "kind": kind, "delivery": delivery, "message": message, "problems": problems}
     if sid: rec["sid"] = sid
@@ -366,6 +368,20 @@ def save_state(out, state):
 # Don't text about a failure more than once per 24h... unless an OK ("pass") cycle
 # happened in between, in which case a fresh failure re-alerts right away.
 ALERT_MIN_INTERVAL = 24 * 3600
+# Problems with the monitor's own reading (low confidence, pixels vs model, LCD not found, unreadable)
+# usually clear on the next cycle, so they only text once seen this many cycles in a row (15 min apart).
+# Boiler error codes and an unreachable camera (already 3 cycles) text straight away.
+ALERT_REPEAT_CYCLES = int(os.environ.get("BOILER_ALERT_REPEAT", "2"))
+URGENT_PROBLEMS = ("error code", "boiler camera unreachable")
+TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Toronto"))
+
+
+def _sms_when(result):
+    try:
+        t = datetime.fromisoformat(result["timestamp"]).astimezone(TZ)
+        return t.strftime("%a %b %-d, %-I:%M %p")
+    except Exception:
+        return result.get("local", "")
 
 
 def evaluate_and_alert(result, out):
@@ -384,11 +400,17 @@ def evaluate_and_alert(result, out):
         probs.append(f"boiler camera unreachable for {state['cap_fail']} cycles")
 
     sig = " | ".join(sorted(probs))
-    when = result.get("local", "")
+    when = _sms_when(result)
     now = time.time()
     sent = False
+    urgent = any(p.startswith(URGENT_PROBLEMS) for p in probs)
+    state["bad_cycles"] = state.get("bad_cycles", 0) + 1 if sig else 0
 
-    if sig:  # something is wrong
+    if sig and not urgent and state["bad_cycles"] < ALERT_REPEAT_CYCLES and not state.get("alerted_open"):
+        # first sighting of a reading problem: wait for the next cycle before texting
+        log(f"alert held (cycle {state['bad_cycles']} of {ALERT_REPEAT_CYCLES}): {sig}")
+        log_alert(out, result, "held", f"⚠️ {sig}", probs, "held")
+    elif sig:  # something is wrong
         last_ts = state.get("last_alert_ts")
         passed = state.get("pass_since_alert", False)   # an OK cycle since the last alert
         stale = last_ts is not None and (now - last_ts) >= ALERT_MIN_INTERVAL
@@ -413,7 +435,8 @@ def evaluate_and_alert(result, out):
 
     state["sig"] = sig
     save_state(out, state)
-    result["alert"] = {"problems": probs, "sent": sent, "throttled": bool(sig) and not sent}
+    held = bool(sig) and not urgent and state["bad_cycles"] < ALERT_REPEAT_CYCLES and not state.get("alerted_open")
+    result["alert"] = {"problems": probs, "sent": sent, "throttled": bool(sig) and not sent and not held, "held": held}
 
 
 STATE_KEYS = ("flame_on", "dhw_icon", "ch_icon")

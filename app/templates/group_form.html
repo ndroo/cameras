@@ -12,7 +12,14 @@
       <label class="chk block"><input type="checkbox" name="notify_doorbell" value="1" {% if g and g.notify_doorbell %}checked{% endif %}>Doorbell pressed</label>
       <label class="chk block"><input type="checkbox" name="notify_tamper" value="1" {% if g and g.notify_tamper %}checked{% endif %}>Camera tampered with</label>
       <label class="chk block"><input type="checkbox" name="notify_offline" value="1" {% if g and g.notify_offline %}checked{% endif %}>Camera offline / back online</label>
-      <label class="chk block"><input type="checkbox" name="notify_motion" value="1" {% if g and g.notify_motion %}checked{% endif %}>Motion / person (noisy)</label></div>
+      <label class="chk block"><input type="checkbox" name="notify_motion" value="1" {% if g and g.notify_motion %}checked{% endif %}>Motion / person (noisy)</label>
+      {% if g and roster.get(g.id) %}
+      <div class="muted tiny" style="margin-top:8px">Who gets them (people can also change this under Account):</div>
+      <table class="rcv tiny"><tr><th></th>{% for k in alert_kinds %}<th title="{{ alert_kinds[k] }}">{{ k }}</th>{% endfor %}</tr>
+        {% for m in roster[g.id] %}<tr><td>{{ m.name }}<input type="hidden" name="rcv_{{ m.id }}" value="1"></td>
+          {% for k in alert_kinds %}<td><input type="checkbox" name="get_{{ m.id }}" value="{{ k }}" {% if k not in m.muted %}checked{% endif %}></td>{% endfor %}</tr>{% endfor %}
+      </table>
+      {% endif %}</div>
   </div>
   <div class="line"><button class="small">Save group</button> {% if g %}<button class="danger small" name="delete" value="1" onclick="return confirm('Delete this group?')">Delete</button>{% endif %}</div>
 </form>
