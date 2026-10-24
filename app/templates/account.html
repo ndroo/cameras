@@ -12,6 +12,17 @@
     <button type="submit" data-busy="Saving…">Save passcode</button>
     {% if me.passcode_hash %}<button type="submit" name="clear" value="1" class="secondary">Remove passcode</button>{% endif %}
   </form>
+  {% if alert_groups %}
+  <h3 style="margin-top:22px">Text alerts</h3>
+  <p class="muted small">Texts you get from your groups. Untick any you don't want.</p>
+  <form method="post" action="/account/alerts">
+    {% for g in alert_groups %}
+    <div class="muted small" style="margin-top:8px">{{ g.house }} · {{ g.name }}</div>
+    {% for k in g.kinds %}<label class="chk block"><input type="checkbox" name="get_{{ g.id }}" value="{{ k.kind }}" {% if k.on %}checked{% endif %}>{{ k.label }}</label>{% endfor %}
+    {% endfor %}
+    <button type="submit" data-busy="Saving…">Save text alerts</button>
+  </form>
+  {% endif %}
   <h3 style="margin-top:22px">Devices</h3>
   <p class="muted small">Signed in on {{ sessions }} device{{ 's' if sessions != 1 else '' }}. Sign-ins last a year.</p>
   <form method="post" action="/account/signout-everywhere"><button class="secondary">Sign out everywhere</button></form>

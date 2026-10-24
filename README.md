@@ -11,6 +11,8 @@ Tapo app is still used to configure cameras.
   the text alerts it has turned on (doorbell, tamper, offline/back online, motion).
   Admins see everything. Example: "Owners" at 180 Beatrice (Andrew + Jess, all cameras,
   offline alerts) and "Tenants" at 180 Beatrice (only the shared cameras, doorbell texts).
+  Each member can switch off any of their group's texts (Account page, or the grid in
+  the group's admin form).
 - **Live view** through the Tapo cloud relay, no site hardware, no port-forwarding:
   `app/tapo.py` (login, JWT, one persistent MQTT session, relay requests) ->
   `app/pipe.py` (MPEG-TS to stdout) -> go2rtc `exec:` source -> MSE/WebRTC/MJPEG in the
@@ -23,8 +25,9 @@ Tapo app is still used to configure cameras.
   down. Support is probed once (`getPresetConfig`) during the first health check and
   stored in `cameras.ptz`; the move itself is `motorMove` through the cloud passthrough.
 - **Health**: every `HEALTH_INTERVAL` seconds each camera is asked for a relay and a
-  frame (also the thumbnail on the home page). Two failures in a row = offline event
-  (+ text to groups with the offline alert), recovery = back-online event.
+  frame (also the thumbnail on the home page). Two failures in a row = offline event;
+  the text only goes out once it has been down `OFFLINE_ALERT_MINUTES` (default 30),
+  and "back online" is only texted to people who got the offline text.
 - **Device events**: the app subscribes to `$tpiot/things/<dev>/events/accepted` and
   `.../shadow/update/accepted`. Raw messages are kept in the `kv` table and shown at
   `/admin/mqtt-log`; `app/events.py` maps them to doorbell / tamper / motion events.

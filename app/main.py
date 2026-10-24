@@ -56,6 +56,9 @@ from concurrent.futures import ThreadPoolExecutor
 _live_pool = ThreadPoolExecutor(max_workers=48, thread_name_prefix="live")
 HEALTH_INTERVAL = int(os.environ.get("HEALTH_INTERVAL", "600"))
 OFFLINE_AFTER = int(os.environ.get("OFFLINE_AFTER_FAILS", "2"))
+# Shown as offline after OFFLINE_AFTER failed checks, but only texted once it has been down this long
+# (Tapo cameras drop off for a check or two now and then and come straight back).
+OFFLINE_ALERT_SECS = int(os.environ.get("OFFLINE_ALERT_MINUTES", "30")) * 60
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Toronto"))
 SECURE_COOKIE = os.environ.get("BASE_URL", "").startswith("https")
 
@@ -237,11 +240,43 @@ def login_code(request: Request, ident: str = Form(...), code: str = Form(""), p
     return _start_session(request, person, next)
 
 
+ALERT_LABELS = {"doorbell": "Doorbell pressed", "tamper": "Camera tampered with",
+                "offline": "Camera offline / back online", "motion": "Motion / person"}
+
+
+def _my_alert_groups(me):
+    """Groups this person is in that send at least one kind of text, with what they get."""
+    out = []
+    for g in db.q("SELECT g.*, h.name AS house_name, gm.muted FROM groups g JOIN houses h ON h.id=g.house_id "
+                  "JOIN group_members gm ON gm.group_id=g.id AND gm.person_id=? ORDER BY h.sort, h.name, g.name", me["id"]):
+        muted = db.muted_set(g["muted"])
+        kinds = [{"kind": k, "label": ALERT_LABELS[k], "on": k not in muted} for k in db.ALERT_KINDS if g[f"notify_{k}"]]
+        if kinds:
+            out.append({"id": g["id"], "name": g["name"], "house": g["house_name"], "kinds": kinds})
+    return out
+
+
 @app.get("/account", response_class=HTMLResponse)
 def account(request: Request, msg: str = "", err: str = ""):
     me = require(request)
     sessions = db.one("SELECT COUNT(*) n FROM sessions WHERE person_id=?", me["id"])["n"]
-    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions)
+    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions, alert_groups=_my_alert_groups(me))
+
+
+@app.post("/account/alerts")
+async def account_alerts(request: Request):
+    """Each person chooses which of their groups' texts they get."""
+    me = require(request)
+    f = await request.form()
+    for g in _my_alert_groups(me):
+        offered = [k["kind"] for k in g["kinds"]]
+        got = set(f.getlist(f"get_{g['id']}"))
+        row = db.one("SELECT muted FROM group_members WHERE group_id=? AND person_id=?", g["id"], me["id"])
+        # kinds the group doesn't send right now keep their old setting
+        muted = (db.muted_set(row["muted"]) - set(offered)) | {k for k in offered if k not in got}
+        db.run("UPDATE group_members SET muted=? WHERE group_id=? AND person_id=?",
+               ",".join(k for k in db.ALERT_KINDS if k in muted), g["id"], me["id"])
+    return RedirectResponse("/account?msg=Text+alerts+saved", status_code=303)
 
 
 @app.post("/account/passcode")
@@ -917,7 +952,7 @@ def _flush_batch():
         for kind in ("offline", "online"):
             for house, names in kinds.get(kind, {}).items():
                 names = sorted(set(names))
-                what = "offline" if kind == "offline" else "back online"
+                what = f"offline (down {OFFLINE_ALERT_SECS // 60}+ min)" if kind == "offline" else "back online"
                 if len(names) == 1:
                     parts.append(f"{names[0]} at {house} is {what}.")
                 else:
@@ -940,10 +975,16 @@ def _queue_alert(person, cam, kind):
             _batch_timer = threading.Timer(BATCH_WINDOW, _flush_batch); _batch_timer.daemon = True; _batch_timer.start()
 
 
-def record_event(cam, kind, detail="", at=None):
+def record_event(cam, kind, detail="", at=None, notify=True):
     if kind == "motion" and db.privacy_active(cam["id"]):
         return None
     eid = db.run("INSERT INTO events(camera_id,kind,at,detail) VALUES(?,?,?,?)", cam["id"], kind, at or time.time(), detail[:500])
+    if notify:
+        notify_event(cam, kind, detail)
+    return eid
+
+
+def notify_event(cam, kind, detail=""):
     house = db.one("SELECT name FROM houses WHERE id=?", cam["house_id"]) if cam["house_id"] else None
     where = f"{cam['name']}" + (f" at {house['name']}" if house else "")
     what = detail.split(":", 2)[2] if detail.startswith("det:") else ""
@@ -964,7 +1005,6 @@ def record_event(cam, kind, detail="", at=None):
             _queue_alert(p, cam, kind)        # one text per house, sent after the window closes
         else:
             sms.send(p["phone"], text, kind=kind, person_id=p["id"])
-    return eid
 
 
 def on_mqtt_event(topic, payload):
@@ -1068,10 +1108,11 @@ def check_camera(cam):
         if not db.privacy_active(cam["id"]):
             _save_thumb(cam["id"], jpeg)
         was = cam["online"]
-        db.run("UPDATE cameras SET online=1, last_check=?, last_error=NULL, fail_count=0, "
+        db.run("UPDATE cameras SET online=1, last_check=?, last_error=NULL, fail_count=0, down_since=NULL, offline_alerted=0, "
                "online_since=COALESCE(CASE WHEN online=1 THEN online_since END, ?) WHERE id=?", time.time(), time.time(), cam["id"])
         if was == 0:
-            record_event(cam, "online")
+            # "back online" is only texted to people who were told it went offline
+            record_event(cam, "online", notify=bool(cam["offline_alerted"]))
         if cam["ptz"] is None:          # first successful check: find out whether it has a motor
             try:
                 db.run("UPDATE cameras SET ptz=? WHERE id=?", 1 if tapo.ptz_supported(cloud, cam["device_id"]) else 0, cam["id"])
@@ -1079,11 +1120,16 @@ def check_camera(cam):
                 log.warning("ptz probe %s: %s", cam["name"], e)
     except Exception as e:
         fails = (cam["fail_count"] or 0) + 1
+        now = time.time()
+        down_since = cam["down_since"] or now
         log.warning("health %s: %s (fail %d)", cam["name"], e, fails)
-        db.run("UPDATE cameras SET last_check=?, last_error=?, fail_count=? WHERE id=?", time.time(), str(e)[:300], fails, cam["id"])
+        db.run("UPDATE cameras SET last_check=?, last_error=?, fail_count=?, down_since=? WHERE id=?", now, str(e)[:300], fails, down_since, cam["id"])
         if fails >= OFFLINE_AFTER and cam["online"] != 0:
-            db.run("UPDATE cameras SET online=0, online_since=? WHERE id=?", time.time(), cam["id"])
-            record_event(cam, "offline", str(e)[:200])
+            db.run("UPDATE cameras SET online=0, online_since=? WHERE id=?", down_since, cam["id"])
+            record_event(cam, "offline", str(e)[:200], notify=False)
+        if fails >= OFFLINE_AFTER and not cam["offline_alerted"] and now - down_since >= OFFLINE_ALERT_SECS:
+            db.run("UPDATE cameras SET offline_alerted=1 WHERE id=?", cam["id"])
+            notify_event(cam, "offline")
 
 
 def health_loop():
@@ -1332,9 +1378,10 @@ def admin(request: Request, msg: str = ""):
     cams = db.q("SELECT c.*, h.name AS house_name FROM cameras c LEFT JOIN houses h ON h.id=c.house_id ORDER BY h.sort, h.name, c.sort, c.name")
     people = db.q("SELECT * FROM people ORDER BY is_admin DESC, name")
     groups = db.q("SELECT g.*, h.name AS house_name FROM groups g JOIN houses h ON h.id=g.house_id ORDER BY h.sort, h.name, g.name")
-    members = {}
-    for r in db.q("SELECT gm.group_id, p.name FROM group_members gm JOIN people p ON p.id=gm.person_id ORDER BY p.name"):
+    members, roster = {}, {}
+    for r in db.q("SELECT gm.group_id, gm.muted, p.id, p.name FROM group_members gm JOIN people p ON p.id=gm.person_id ORDER BY p.name"):
         members.setdefault(r["group_id"], []).append(r["name"])
+        roster.setdefault(r["group_id"], []).append({"id": r["id"], "name": r["name"], "muted": db.muted_set(r["muted"])})
     gcams = {}
     for r in db.q("SELECT gc.group_id, c.name FROM group_cameras gc JOIN cameras c ON c.id=gc.camera_id ORDER BY c.name"):
         gcams.setdefault(r["group_id"], []).append(r["name"])
@@ -1350,7 +1397,7 @@ def admin(request: Request, msg: str = ""):
     except Exception:
         lcd = None
     return render(request, "admin.html", houses=houses, cams=cams, people=people, groups=groups, members=members,
-                  gcams=gcams, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
+                  roster=roster, alert_kinds=ALERT_LABELS, gcams=gcams, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
                   heating=_heating_state, watch=watch, backup=backup, lcd=lcd)
 
 
@@ -1465,9 +1512,18 @@ async def admin_group(request: Request):
         db.run("UPDATE groups SET name=?, house_id=?, all_cameras=?, notify_doorbell=?, notify_tamper=?, notify_offline=?, notify_motion=? WHERE id=?", *vals, gid)
     else:
         gid = db.run("INSERT INTO groups(name,house_id,all_cameras,notify_doorbell,notify_tamper,notify_offline,notify_motion) VALUES(?,?,?,?,?,?,?)", *vals)
+    # Per-member opt-outs: the grid lists members as they were before this save (rcv_<pid> marks a row);
+    # anyone without a row (just added) keeps what they had, or gets everything if new.
+    before = {r["person_id"]: r["muted"] or "" for r in db.q("SELECT person_id, muted FROM group_members WHERE group_id=?", gid)}
     db.run("DELETE FROM group_members WHERE group_id=?", gid)
     for pid in f.getlist("members"):
-        db.run("INSERT OR IGNORE INTO group_members(group_id,person_id) VALUES(?,?)", gid, int(pid))
+        pid = int(pid)
+        if f.get(f"rcv_{pid}"):
+            got = set(f.getlist(f"get_{pid}"))
+            muted = ",".join(k for k in db.ALERT_KINDS if k not in got)
+        else:
+            muted = before.get(pid, "")
+        db.run("INSERT OR IGNORE INTO group_members(group_id,person_id,muted) VALUES(?,?,?)", gid, pid, muted)
     db.run("DELETE FROM group_cameras WHERE group_id=?", gid)
     for cid in f.getlist("cameras"):
         db.run("INSERT OR IGNORE INTO group_cameras(group_id,camera_id) VALUES(?,?)", gid, int(cid))

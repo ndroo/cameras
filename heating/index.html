@@ -685,10 +685,12 @@ function renderAll(){
 function renderAlerts(list){
   const kindPill = k => k==="problem" ? '<span class="pill bad">problem</span>'
     : k==="cleared" ? '<span class="pill ok">cleared</span>'
+    : k==="held" ? '<span class="pill off">waiting</span>'
     : '<span class="pill off">suppressed</span>';
   const delivPill = d => d==="sent" ? '<span class="pill ok">sent</span>'
     : d==="failed" ? '<span class="pill bad">failed</span>'
     : d==="suppressed" ? '<span class="pill off">throttled</span>'
+    : d==="held" ? '<span class="pill off">held</span>'
     : '<span class="pill warn">not configured</span>';
   $("abody").innerHTML = list.slice().reverse().slice(0,80).map(a=>{
     const det = (a.problems&&a.problems.length? a.problems.join(", ") : (a.message||"").replace(/^[^A-Za-z0-9]+\s*/,""))
