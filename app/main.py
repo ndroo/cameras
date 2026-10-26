@@ -1188,14 +1188,16 @@ def heating_cycle():
     return ok
 
 
-def _prune_stills(keep_days=2):
-    """Timestamped stills pile up fast; keep two days of them (the *_latest.jpg files stay)."""
-    cutoff = time.time() - keep_days * 86400
+def _prune_stills(keep_days=2, keep_disputed_days=30):
+    """Timestamped stills pile up fast; keep two days of them (the *_latest.jpg files stay).
+    Frames where the arbiter overruled the pixels (disputed_*) are kept a month for review."""
+    now = time.time()
     try:
         for f in os.listdir(HEATING_OUT):
             if f.endswith(".jpg") and "_latest" not in f:
                 p = os.path.join(HEATING_OUT, f)
-                if os.path.getmtime(p) < cutoff:
+                days = keep_disputed_days if f.startswith("disputed_") else keep_days
+                if os.path.getmtime(p) < now - days * 86400:
                     os.remove(p)
     except Exception:
         pass

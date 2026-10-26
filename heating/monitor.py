@@ -468,12 +468,17 @@ def needs_confirmation(r, prev=None):
 #     icon lit, the state changed, the temperature jumped, a field hasn't earned trust yet,
 #     or it's time for a periodic audit. Its answer is compared field by field; a disagreement
 #     goes to the confirmation model (Opus) as arbiter.
-#   - Trust: consecutive agreements per field in <out>/lcd_trust.json. Once a field has
-#     TRUST_FULL agreements the model is no longer consulted for it routinely, only on the
-#     triggers above. A disagreement resets that field's streak.
+#   - Trust: per field in <out>/lcd_trust.json, a rolling record of the last TRUST_WINDOW model
+#     checks (1 = pixels agreed or the arbiter sided with them, 0 = the arbiter sided with the
+#     model). A field is trusted with a full window and at most TRUST_MAX_MISSES misses in it;
+#     once every field is, the model is only consulted on the triggers above. A strict streak
+#     never got there: both models misread the same frame now and then (117 read as 119, lit pump
+#     icons read as off) and each such "miss" sent a 200-long streak back to zero.
+#   - A failed arbiter call is no evidence either way and leaves the record alone.
 # ---------------------------------------------------------------------------------------
 PIXEL_FIELDS = ("mode", "flame_on", "boiler_pump", "ch_pump", "temperature")   # fan_on is pixel-read but not compared: the models misread it
-TRUST_FULL = 200          # agreements in a row before routine model checks stop for a field
+TRUST_WINDOW = 200        # model checks per field in the rolling trust record (~2 days at 15 min)
+TRUST_MAX_MISSES = 2      # arbiter-confirmed pixel misses allowed in that window (1%)
 AUDIT_SECONDS = 2 * 3600  # trusted or not, ask the model at least this often
 TEMP_JUMP_F = 20          # a pixel temperature move bigger than this between cycles gets a model look
 PX_FIELD_MAP = {"flame_on": "flame", "fan_on": "fan", "boiler_pump": "boiler_pump", "ch_pump": "ch_pump",
@@ -496,6 +501,65 @@ def _in_gap(score, off_max, on_min):
 
 
 def _trust_path(out): return os.path.join(out, "lcd_trust.json")
+
+
+def field_trusted(st):
+    rec = (st or {}).get("recent") or []
+    return len(rec) >= TRUST_WINDOW and rec.count(0) <= TRUST_MAX_MISSES
+
+
+def record_check(st, ok):
+    """One model check for a field: ok = the pixels stood. Keeps the streak/totals for the record."""
+    st.setdefault("recent", []).append(1 if ok else 0)
+    st["recent"] = st["recent"][-TRUST_WINDOW:]
+    if ok:
+        st["streak"] += 1; st["agree"] += 1
+    else:
+        st["streak"] = 0; st["disagree"] += 1
+
+
+def _seed_recent(out, trust):
+    """Fields saved before the rolling record existed: rebuild it from readings.jsonl (cycles the
+    model checked since the current pixel method started; a miss = the field in pixel_miss)."""
+    import lcd_pixels
+    if all("recent" in trust["fields"].get(f, {}) for f in PIXEL_FIELDS) or not trust["fields"]:
+        return
+    since = next((h["ended"] for h in reversed(trust.get("history", []))), "")
+    recs = {f: [] for f in PIXEL_FIELDS}
+    try:
+        for line in open(os.path.join(out, "readings.jsonl")):
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            rd = (r.get("boiler") or {}).get("reading") or {}
+            src = rd.get("source") or {}
+            if (r.get("timestamp") or "") < since or not src.get("verified_by") or rd.get("lcd_unregistered"):
+                continue
+            notes = rd.get("notes") or ""
+            failed = notes.split("arbiter failed on ", 1)[1].split(" |")[0].split(", ") if "arbiter failed on " in notes else []
+            for f in PIXEL_FIELDS:
+                if f in failed:
+                    continue
+                if f not in src.get("model", []) or f in (rd.get("pixel_miss") or []):
+                    recs[f].append(0 if f in (rd.get("pixel_miss") or []) else 1)
+    except Exception:
+        pass
+    for f in PIXEL_FIELDS:
+        st = trust["fields"].setdefault(f, {"streak": 0, "agree": 0, "disagree": 0})
+        st.setdefault("recent", recs[f][-TRUST_WINDOW:])
+    log("boiler: trust record seeded from readings.jsonl: " +
+        ", ".join(f"{f} {len(trust['fields'][f]['recent'])}/{trust['fields'][f]['recent'].count(0)} miss" for f in PIXEL_FIELDS))
+
+
+def keep_disputed(out, p):
+    """Keep the frame when the arbiter overrules the pixels (_prune_stills skips disputed_*), so a
+    human can check who was right."""
+    try:
+        import shutil
+        shutil.copy2(p, os.path.join(out, "disputed_" + os.path.basename(p)))
+    except Exception as e:
+        log("boiler: could not keep disputed frame:", e)
 
 
 def load_trust(out):
@@ -546,9 +610,10 @@ def verify_reasons(px, cur, prev, trust):
         reasons.append("unconfirmed icon lit: " + ", ".join(lit_prov))
     if trust.get("probation"):
         reasons.append(f"LCD re-found after a camera move ({trust['probation']} check(s) left)")
-    untrusted = [f for f in PIXEL_FIELDS if trust["fields"].get(f, {}).get("streak", 0) < TRUST_FULL]
+    untrusted = [f for f in PIXEL_FIELDS if not field_trusted(trust["fields"].get(f))]
     if untrusted:
-        reasons.append(f"building trust ({len(untrusted)} field(s) under {TRUST_FULL} agreements)")
+        reasons.append(f"building trust ({len(untrusted)} field(s) without {TRUST_WINDOW} checks at "
+                       f"<= {TRUST_MAX_MISSES} misses)")
     if isinstance(prev, dict):
         changed = [k for k in ("mode", "flame_on", "boiler_pump", "ch_pump") if prev.get(k) != cur.get(k)]
         if changed:
@@ -582,6 +647,7 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
             trust.setdefault("history", []).append({"method": trust.get("pixel_method"), "ended": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                                     "fields": trust["fields"], "learned_icons": trust["learned_icons"]})
         trust["fields"] = {}; trust["learned_icons"] = {}; trust["pixel_method"] = lcd_pixels.METHOD
+    _seed_recent(out, trust)
     usage = {"model": None, "input": 0, "output": 0, "cache_read": 0}
     if (lcd.get("recal") or {}).get("adopted"):
         trust["probation"] = RECAL_PROBATION
@@ -666,6 +732,7 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
     arbiter_q += disagree
     cur["confidence"] = "high"
     verdict = {}
+    arbiter_ok = False
     if arbiter_q and confirm_model:
         log(f"boiler: arbiter {confirm_model} asked about {arbiter_q}")
         arb, u2 = analyze(client, confirm_model, prompt, imgs, BOILER_SCHEMA, effort="medium")
@@ -674,6 +741,7 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
         usage["confirm_model"] = confirm_model
         usage["calls"].append({"model": confirm_model, "input": u2.get("input") or 0, "output": u2.get("output") or 0, "role": "arbiter"})
         if isinstance(arb, dict) and not arb.get("_error"):
+            arbiter_ok = True
             arb["mode"] = derive_mode(arb)
             px_vals = px_as_reading(px)
             for f in disagree:
@@ -711,19 +779,23 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
                 trust["disagreements"].append({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "image": os.path.basename(p),
                                                "fields": {f: {"pixels": px_vals.get(f), "model": m.get(f), "verdict": verdict[f]} for f in disagree}})
                 cur["notes"] += " | disagreement on " + ", ".join(f"{f} (arbiter: {verdict[f]})" for f in disagree)
+                if "model" in (verdict[f] for f in disagree):
+                    keep_disputed(out, p)
         else:
             cur["confidence"] = "low"; cur["notes"] += " | arbiter failed on " + ", ".join(arbiter_q)
             for fld, icon in prov_model_only:
                 cur[fld] = False
     elif disagree:
         cur["confidence"] = "low"; cur["notes"] += " | disagreement on " + ", ".join(disagree) + " (no arbiter)"
-    # Trust: a field's streak resets only when the pixels were shown wrong (arbiter sided with the model).
+    # Trust: a miss only when the arbiter actually ruled for the model. No arbiter answer (failed
+    # call, or none configured) on a disputed field is no evidence either way: leave its record alone.
     for f in PIXEL_FIELDS:
+        if f in cur["source"]["model"] and f not in cur.get("pixel_miss", []):
+            continue    # the model supplied this field (digits didn't decode): nothing to compare
         st = trust["fields"].setdefault(f, {"streak": 0, "agree": 0, "disagree": 0})
-        if f in disagree and verdict.get(f) != "pixels":
-            st["streak"] = 0; st["disagree"] += 1
-        else:
-            st["streak"] += 1; st["agree"] += 1
+        if f in disagree and not arbiter_ok:
+            continue
+        record_check(st, not (f in disagree and verdict.get(f) == "model"))
     cur["pump_on"] = bool(cur["boiler_pump"] or cur["ch_pump"] or cur["dhw_pump"]); cur["mode"] = derive_mode(cur)
     if cur.get("error_codes"):
         cur["confidence"] = "high"   # an error code read by the model is a finding, not an uncertainty
@@ -735,6 +807,9 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
 def _trust_summary(t):
     return {"cycles": t["cycles"], "model_calls": t["model_calls"],
             "streaks": {f: t["fields"].get(f, {}).get("streak", 0) for f in PIXEL_FIELDS},
+            "window": {f: [len(t["fields"].get(f, {}).get("recent") or []), (t["fields"].get(f, {}).get("recent") or []).count(0)]
+                       for f in PIXEL_FIELDS},
+            "trusted": [f for f in PIXEL_FIELDS if field_trusted(t["fields"].get(f))],
             "learned_icons": sorted(t["learned_icons"])}
 
 

@@ -609,7 +609,7 @@ function renderEcoCards(){
     </div>`; }).join("");
 }
 
-const TRUST_FULL = 200;   // must match monitor.py
+const TRUST_WINDOW = 200;   // must match monitor.py
 function renderStats(rows){
   if(!rows.length){ $("stats").innerHTML=""; return; }
   const last=rows[rows.length-1]; const RR=runRate();
@@ -626,7 +626,7 @@ function renderStats(rows){
     S("Burner firing", `${fire}/${got}`, `heat call ${heat} · DHW call ${dhw}`) +
     (RR ? S("Model spend", `$${RR.perMonth.toFixed(0)}/mo`,
              `$${RR.perDay.toFixed(2)}/day · ${RR.modelCalls} check${RR.modelCalls===1?'':'s'} in ${RR.hours.toFixed(0)} h (${Object.entries(RR.byModel).map(([m,n])=>shortModel(m).replace(' 5.5','')+' '+n).join(', ')||'none'})`
-             + (last.trust ? ` · trust ${Math.min(...Object.values(last.trust.streaks||{0:0}))}/${TRUST_FULL}` : ''))
+             + (last.trust ? (last.trust.trusted ? ` · pixels trusted ${last.trust.trusted.length}/5 fields` : ` · trust ${Math.min(...Object.values(last.trust.streaks||{0:0}))}/${TRUST_WINDOW}`) : ''))
         : S("Model spend", "—", "no readings in the last 24 h")) +
     (WXL&&WXL.temp_c!=null ? S("Outdoor now", `${Number(WXL.temp_c).toFixed(1)}°C`, `feels ${WXL.apparent_c!=null?Number(WXL.apparent_c).toFixed(1)+'°':'—'} · ${WXL.humidity??'—'}% RH · wind ${WXL.wind_kmh??'—'} km/h${WX_DESC[WXL.weather_code]?' · '+WX_DESC[WXL.weather_code]:''}`) : "");
 }
