@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import audio, db, sms, tapo
+from . import audio, db, rtsp, sms, tapo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("app")
@@ -1077,29 +1077,39 @@ def detection_loop():
 
 
 # ------------------------------------------------------------------ health checks
-def _snapshot_from_relay(device_id):
-    url, tok = mq.request_relay(device_id, timeout=15)
+def _snapshot_from_relay(device_id, timeout=12, resolution="VGA"):
+    """One keyframe, then hang up. Pulls ~100-300 KB instead of seconds of video, which matters on
+    slow uplinks where several cameras share the line."""
+    url, tok = mq.request_relay(device_id, timeout=15, resolution=resolution)
     sock = tapo.connect_relay(url, tok, cloud.term)
-    tapo.start_preview(sock)
-    ts = bytearray(); t0 = time.time()
+    tapo.start_preview(sock, resolution)
+    demux = rtsp.TsDemux(); params = {}; idr = None; got = 0; t0 = time.time()
     try:
         for chunk in tapo.iter_ts(sock, timeout=15):
-            ts += chunk
-            if len(ts) > 1_200_000 or time.time() - t0 > 12:
+            got += len(chunk)
+            for kind, _pts, data in demux.feed(chunk):   # complete PES packets only
+                if kind != "video":
+                    continue
+                nals = rtsp.nal_units(data)
+                for n in nals:
+                    if n[0] & 0x1F in (7, 8):
+                        params[n[0] & 0x1F] = n
+                if any(n[0] & 0x1F == 5 for n in nals):
+                    idr = nals
+                    break
+            if (idr and 7 in params and 8 in params) or time.time() - t0 > timeout:
                 break
     finally:
         sock.close()
-    if len(ts) < 50_000:
-        raise RuntimeError(f"too little video ({len(ts)} bytes)")
-    d = tempfile.mkdtemp(prefix="cam_")
-    try:
-        tsp = os.path.join(d, "s.ts"); open(tsp, "wb").write(ts)
-        out = os.path.join(d, "f.jpg")
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tsp, "-frames:v", "1", "-vf", "scale=800:-2",
-                        "-q:v", "4", out], check=True, capture_output=True, timeout=40)
-        return open(out, "rb").read()
-    finally:
-        import shutil; shutil.rmtree(d, ignore_errors=True)
+    if not idr or 7 not in params or 8 not in params:
+        raise RuntimeError(f"no keyframe ({got} bytes in {time.time() - t0:.0f}s)")
+    es = b"".join(b"\x00\x00\x00\x01" + n for n in [params[7], params[8]] + [n for n in idr if n[0] & 0x1F not in (7, 8)])
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "h264", "-i", "pipe:0", "-frames:v", "1",
+                        "-vf", "scale=800:-2", "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", "pipe:1"],
+                       input=es, capture_output=True, timeout=40)
+    if r.returncode != 0 or not r.stdout:
+        raise RuntimeError(f"keyframe decode failed: {r.stderr[:200]!r}")
+    return r.stdout
 
 
 def _ping_camera(device_id):
@@ -1148,13 +1158,28 @@ def check_camera(cam):
             notify_event(cam, "offline")
 
 
+def _interleave_by_house(cams):
+    """Round-robin across houses so cameras sharing one internet line aren't checked back to back."""
+    by = {}
+    for c in cams:
+        by.setdefault(c["house_id"], []).append(c)
+    queues = list(by.values()); out = []
+    while any(queues):
+        for q in queues:
+            if q:
+                out.append(q.pop(0))
+    return out
+
+
 def health_loop():
     time.sleep(20)
     while True:
-        for cam in db.q("SELECT * FROM cameras WHERE enabled=1"):
+        t0 = time.time()
+        cams = _interleave_by_house(db.q("SELECT * FROM cameras WHERE enabled=1 ORDER BY house_id, id"))
+        gap = HEALTH_INTERVAL / max(len(cams), 1)      # spread the checks over the whole interval
+        for i, cam in enumerate(cams):
             check_camera(cam)
-            time.sleep(2)
-        time.sleep(HEALTH_INTERVAL)
+            time.sleep(max(2, t0 + (i + 1) * gap - time.time()))
 
 
 @app.post("/admin/check/{cam_id}")
