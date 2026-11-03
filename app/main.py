@@ -1102,10 +1102,26 @@ def _snapshot_from_relay(device_id):
         import shutil; shutil.rmtree(d, ignore_errors=True)
 
 
+def _ping_camera(device_id):
+    """Tiny control call through the cloud. Proves the camera is up without pulling video."""
+    tapo.device_call(cloud, device_id, [{"method": "getDeviceInfo", "params": {"device_info": {"name": ["basic_info"]}}}],
+                     timeout=20)
+
+
 def check_camera(cam):
     try:
-        jpeg = _snapshot_from_relay(cam["device_id"])
-        if not db.privacy_active(cam["id"]):
+        try:
+            jpeg = _snapshot_from_relay(cam["device_id"])
+        except Exception as e:
+            # On a slow uplink the 12 s video grab fails now and then (relay 404 / too little video)
+            # while the camera is fine. Only call it down if it doesn't answer a control call either.
+            try:
+                _ping_camera(cam["device_id"])
+            except Exception:
+                raise e
+            log.info("health %s: no snapshot (%s) but camera answers; counting as online", cam["name"], e)
+            jpeg = None
+        if jpeg and not db.privacy_active(cam["id"]):
             _save_thumb(cam["id"], jpeg)
         was = cam["online"]
         db.run("UPDATE cameras SET online=1, last_check=?, last_error=NULL, fail_count=0, down_since=NULL, offline_alerted=0, "
