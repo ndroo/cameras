@@ -24,7 +24,7 @@ Usage:
   python3 monitor.py --model claude-haiku-5-5   # cheaper model
 """
 import argparse, base64, json, os, sys, time, traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import grab_boiler_cloud as cap  # reuse the capture pipeline (also loads .env)
@@ -98,6 +98,11 @@ LED_AMBIGUOUS = (0.25, 0.75) # between calibrated OFF (<= 0.15) and ON (>= 0.89)
 
 # HTP UFT-series boiler, P-950EH control. Icon legend is from manual LP-542 Figure 51
 # (LCD Display). The model gets the annotated figure itself as a reference image.
+# The "mid-grey" and "hooked 7" paragraphs were added 2026-11-12: with "LIT only if solidly
+# dark/black" both models read the hooked 7 as a 9 and Sonnet missed most lit flame icons. No API
+# key locally, so they were tried on Sonnet and Opus subagents over 20 labelled LCD zooms (not the
+# API path, frames batched): Sonnet hooked 7s 0/6 -> 5/6, lit flame 4/7 -> 7/7, lit pumps 0/2 ->
+# 2/2, real 9s 4/4 both ways, no icon called lit that wasn't; Opus with the new text 20/20.
 BOILER_PROMPT = """You are reading the LCD of an HTP UFT-series boiler controller (P-950EH).
 IMAGE 1 is the manufacturer's legend drawing of this exact LCD (manual LP-542, Figure 51)
 with the key icons boxed. IMAGE 2 is the full camera frame for context. IMAGE 3 is a zoom
@@ -118,8 +123,15 @@ Icon positions (as in the drawing, left to right):
   pump.
 - BOTTOM: 0-18 numbered boxes = cascade status (normally blank on a single boiler).
 
-Judge an icon LIT only if its segments are clearly, solidly dark/black. A faint ghost
-outline (all segments are faintly visible on an LCD) is OFF. Assess each icon independently.
+Lit segments photograph as mid-grey on this camera, not black: judge an icon LIT if its shape
+is clearly drawn, about as dark as the always-lit HOUSE icon in the top row. A faint ghost
+outline you have to look for (all segments are faintly visible on an LCD) is OFF. Assess each
+icon independently. The four icons on the right form a 2x2 block when all are lit: FAN (top
+left) and CROWN-of-flames (top right) above the two pump circles.
+
+Digits: this display draws its 7 with a hook - the top bar, the upper-LEFT bar and both
+right-hand bars are lit. That is a 7, not a 9: a 9 also has the middle bar and the bottom bar,
+each as solid as the top bar. No bottom bar = 7.
 Report any fault code shown in place of the temperature (e.g. "E04", "Er:76") in
 error_codes. If the screen is off or unreadable, set legible=false and all booleans false."""
 
@@ -528,6 +540,83 @@ def evaluate_and_alert(result, out):
     save_state(out, state)
     held = bool(sig) and not urgent and state["bad_cycles"] < ALERT_REPEAT_CYCLES and not state.get("alerted_open")
     result["alert"] = {"problems": probs, "sent": sent, "throttled": bool(sig) and not sent and not held, "held": held}
+
+
+# ---------------------------------------------------------------------------------------
+# Texts about the monitor itself rather than the boiler: the zone panel out of view, model spend
+# running high (1-12 Nov 2026 ran at 2 to 7 times the usual spend and nobody was told). Kept apart
+# from the boiler alerts above - own state, own 24 h reminder - so neither can hold the other
+# back: a spend warning that stays open for days must not swallow an error code.
+# ---------------------------------------------------------------------------------------
+# USD per million tokens (input, output): the dashboard's table (index.html PRICE).
+MODEL_PRICE = {"claude-sonnet-5-5": (2, 10), "claude-opus-5-5": (4, 20), "claude-haiku-5-5": (0.1, 0.5)}
+SPEND_ALERT_PER_DAY = float(os.environ.get("SPEND_ALERT_PER_DAY", "1.25"))   # $ in 24 h worth a text (usual: ~0.5); 0 = off
+SPEND_ALERT_GRACE = 72 * 3600     # no verdict for this long after the check first runs (trust rebuilding costs more)
+
+
+def usage_cost(u):
+    u = u if isinstance(u, dict) else {}
+    calls = u.get("calls") or ([u] if u.get("model") else [])
+    return sum(((c.get("input") or 0) * p[0] + (c.get("output") or 0) * p[1]) / 1e6
+               for c in calls for p in [MODEL_PRICE.get(c.get("model"), MODEL_PRICE["claude-sonnet-5-5"])])
+
+
+def spend_24h(out, result):
+    """Estimated model spend ($) over the 24 h up to and including this cycle."""
+    cost = lambda r: sum(usage_cost((r.get(k) or {}).get("usage")) for k in ("boiler", "zone") if isinstance(r.get(k), dict))
+    start = (datetime.fromisoformat(result["timestamp"]) - timedelta(hours=24)).isoformat()
+    total = cost(result)
+    try:
+        with open(os.path.join(out, "readings.jsonl"), "rb") as f:
+            f.seek(0, 2); size = f.tell(); f.seek(max(0, size - 2_000_000))     # a day is ~0.4 MB
+            lines = f.read().split(b"\n")
+    except FileNotFoundError:
+        return total
+    for line in lines[1 if size > 2_000_000 else 0:]:
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(r, dict) and (r.get("timestamp") or "") >= start:
+            total += cost(r)
+    return total
+
+
+def monitor_problems(result, out, mon):
+    """[(kind, text)] for the monitor's own troubles. mon: the "monitor" part of the alert state."""
+    probs = []
+    zone = result.get("zone") if isinstance(result.get("zone"), dict) else {}
+    if ((zone.get("view") or {}).get("suspect_cycles") or 0) >= ZONE_SUSPECT_BURST:
+        probs.append(("zone", "zone panel not readable for an hour or more - camera moved, or the panel has no power"))
+    if SPEND_ALERT_PER_DAY > 0:
+        t = datetime.fromisoformat(result["timestamp"])
+        mon.setdefault("spend_from", result["timestamp"])
+        if (t - datetime.fromisoformat(mon["spend_from"])).total_seconds() >= SPEND_ALERT_GRACE:
+            spend = spend_24h(out, result)
+            # once texted, it has to come down a fifth below the line to count as cleared
+            if spend > SPEND_ALERT_PER_DAY * (0.8 if "spend" in mon.get("texted", []) else 1):
+                probs.append(("spend", f"model spend ${spend:.2f} in the last 24 h (usually about $0.50) - see the heating page"))
+    return probs
+
+
+def monitor_alert(result, out):
+    state = load_state(out); mon = state.setdefault("monitor", {})
+    probs = monitor_problems(result, out, mon)
+    kinds = [k for k, _ in probs]; texts = [t for _, t in probs]
+    texted = [k for k in mon.get("texted", []) if k in kinds]     # what has cleared may be texted about again
+    when = _sms_when(result); now = time.time(); sent = False
+    if probs and (any(k not in texted for k in kinds) or now - (mon.get("last_ts") or 0) >= ALERT_MIN_INTERVAL):
+        msg = f"⚠️ Boiler monitor: {' | '.join(texts)}. ({when})"
+        res = send_sms(msg); sent = res.get("status") == "sent"
+        log_alert(out, result, "problem", msg, texts, res.get("status"), res.get("sid", ""), res.get("error", ""))
+        mon["last_ts"] = now; texted = kinds
+    elif not probs and mon.get("texted"):
+        msg = f"✅ Boiler monitor: zone view / model spend back to normal. ({when})"
+        res = send_sms(msg)
+        log_alert(out, result, "cleared", msg, [], res.get("status"), res.get("sid", ""), res.get("error", ""))
+    mon["texted"] = texted
+    save_state(out, state)
+    result.setdefault("alert", {})["monitor"] = {"problems": texts, "sent": sent}
 
 
 STATE_KEYS = ("flame_on", "dhw_icon", "ch_icon")
@@ -975,6 +1064,11 @@ def _trust_summary(t):
 # ---------------------------------------------------------------------------------------
 ZONE_TRUST_FULL = 30            # agreements per LED before state changes stop triggering a model check
 ZONE_AUDIT_SECONDS = 6 * 3600   # trusted or not, ask the model at least this often
+# A disc with no white in it, or all white, is not a judgment call. Opus calls zone 2 lit on about
+# one frame in six when it only glows pink beside a lit zone 3 (white 0.00-0.04); each of those reset
+# zone 2's streak, so it never reached ZONE_TRUST_FULL and every LED change kept costing a model call.
+# Such a disagreement is still logged, but only one inside this band resets the streak.
+ZONE_CLEAR = (0.05, 0.95)
 ZONE_SUSPECT_BURST = 4          # suspect cycles in a row that each get a model read (1 h at 15 min)
 ZONE_SUSPECT_EVERY = 4          # after that, every this many cycles (hourly)
 
@@ -1020,6 +1114,7 @@ def read_zone(client, out, p, zone_llm="auto"):
     reasons = []; held = False
     if view_suspect:
         trust["suspect_streak"] = n = trust.get("suspect_streak", 0) + 1
+        view["suspect_cycles"] = n
         why = "power LED dark (panel off / camera moved)" if found else \
               "Taco panel not found in the frame (" + (view.get("error") or f"match {view.get('score')}") + ")"
         has_prev = isinstance(prev, dict) and all(k in prev for k in ZONE_LEDS)
@@ -1070,7 +1165,9 @@ def read_zone(client, out, p, zone_llm="auto"):
         if k in decide:
             continue                                      # nothing to learn: pixels weren't sure
         st = trust["leds"].setdefault(k, {"streak": 0, "agree": 0, "disagree": 0})
-        if k in clash:
+        if k in clash and not ZONE_CLEAR[0] < m[k]["white"] < ZONE_CLEAR[1]:
+            st["clear_disputes"] = st.get("clear_disputes", 0) + 1     # logged below; the streak stands
+        elif k in clash:
             st["streak"] = 0; st["disagree"] += 1
         else:
             st["streak"] += 1; st["agree"] += 1
@@ -1175,6 +1272,10 @@ def cycle(client, model, out, zone_llm="auto", confirm_model=CONFIRM_MODEL_DEFAU
         log("zone capture failed:", e)
 
     evaluate_and_alert(result, out)
+    try:
+        monitor_alert(result, out)
+    except Exception:
+        log("monitor alert error:\n" + traceback.format_exc())
 
     with open(os.path.join(out, "readings.jsonl"), "a") as f:
         f.write(json.dumps(result) + "\n")
