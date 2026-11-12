@@ -17,7 +17,8 @@ a full perspective transform. The anchor's corners go through that transform. Re
 found (ECC 0.94, 66-88 inlier matches) and read.
 
 Recalibration runs when the LCD stops registering against the reference (monitor), or when an
-admin asks for it (<out>/lcd_recalibrate exists).
+admin asks for it (<out>/lcd_recalibrate exists). A slow drift of a few px is not a new position:
+follow() moves the corners with it and keeps the reference and the digit history.
 """
 import json, os, shutil, time
 import numpy as np
@@ -32,6 +33,7 @@ REQUEST = "lcd_recalibrate"     # touched by the admin "recalibrate" button
 HIST_MAX = 300                  # segment values kept per segment
 ANCHOR_REFRESH_S = 6 * 3600     # re-take the anchor this often from a good read, so lighting stays current
 MIN_INLIERS = 15
+FOLLOW_SEARCH = 20              # px each way (flat image) follow() looks for a drifted LCD
 MIN_ECC = 0.8
 
 
@@ -145,6 +147,28 @@ def _find_from(anchor_path, anchor_corners, path):
     if not (0.3 < ratio < 3.5) or not inside:
         return None, {**stats, "error": f"implausible LCD outline (area x{ratio:.2f}, inside frame: {inside})"}
     return [[round(float(x), 1), round(float(y), 1)] for x, y in corners], stats
+
+
+def follow(out, path, g):
+    """The LCD has crept a few px off its reference (the camera sags on its mount): measure the
+    offset with a wider search and move the corners by it. Nothing about the view has changed but
+    its position, so the reference and the digit history stay. Returns (new geometry or None, stats).
+    2026-11-12: the LCD sat 8 px off with a +-6 px search and a match (0.63) still above min_ncc, so
+    nothing corrected it; the alignment wrapped the bottom bezel into the top-row icon boxes and the
+    sun icon read lit on 140 of 182 frames. Replayed over those frames with the corners moved:
+    sun 0/182, every temperature decodes, match 0.83 or better."""
+    flat = np.asarray(lcd_pixels.flatten(path, g["corners"]), dtype=np.float32)
+    ncc, dx, dy = lcd_pixels.register(flat, load_ref(out, g), FOLLOW_SEARCH)
+    stats = {"ncc": round(float(ncc), 3), "dx": int(dx), "dy": int(dy)}
+    if max(abs(dx), abs(dy)) >= FOLLOW_SEARCH or ncc < lcd_pixels._calib()["min_ncc"]:
+        return None, {**stats, "error": "offset is beyond the follow search"}
+    old = {"until": _now(), "since": g.get("since"), "how": g.get("how"), "corners": g.get("corners")}
+    g = {**g, "corners": lcd_pixels.shift_corners(g["corners"], dx, dy), "since": _now(),
+         "how": f"followed a drift of ({dx}, {dy}) px", "anchor_at": time.time(), "drift_n": 0,
+         "history": g.get("history", []) + [old]}
+    shutil.copy(path, os.path.join(out, ANCHOR))    # the latest anchor must show the LCD at these corners
+    save(out, g)
+    return g, stats
 
 
 def adopt(out, path, corners, stats, why):

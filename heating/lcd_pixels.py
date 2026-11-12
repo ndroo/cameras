@@ -7,7 +7,7 @@ Pipeline (all numpy + Pillow):
      when the camera is moved.
   2. The frame is perspective-warped to a flat 640x220 grayscale rectangle using those corners.
   3. The flat image is registered (+-6 px) against the reference so a small camera nudge does
-     not move the icon boxes.
+     not move the icon boxes. A shift that stays is folded into the corners (lcd_recal.follow).
   4. Icons: score = share of the box's pixels at least 15% darker than the glass around the box
      in the same frame (calib "icon_method"). This replaced darkness against the stored all-off
      photo on 2026-10-20: lighting changes made that reference stale (unlit icons scored 9-22 and
@@ -59,7 +59,9 @@ def flatten(path, corners):
     dst = [(p, p), (W - p, p), (W - p, H - p), (p, H - p)]
     return g.transform((W, H), Image.PERSPECTIVE, tuple(_persp([tuple(q) for q in corners], dst)), Image.BICUBIC)
 
-def register(a, ref=None, r=6):
+REG_RADIUS = 6      # px each way the per-frame alignment search covers
+
+def register(a, ref=None, r=REG_RADIUS):
     """(ncc, dx, dy): shift that best aligns frame `a` to the reference on the static regions."""
     c = _calib(); m = c["_mask"]; ref = c["_ref"] if ref is None else ref; y = ref[m] - ref[m].mean(); yy = float((y * y).sum())
     best = None
@@ -70,6 +72,18 @@ def register(a, ref=None, r=6):
             if best is None or s > best[0]:
                 best = (s, dx, dy)
     return best
+
+def shift_corners(corners, dx, dy):
+    """The glass corners moved by (dx, dy) flat-image px - where register() says the LCD now is.
+    Flattening from the result puts the LCD back on its reference."""
+    c = _calib(); W, H = c["out_size"]; p = c["pad"]
+    dst = [(p, p), (W - p, p), (W - p, H - p), (p, H - p)]
+    k = _persp([tuple(q) for q in corners], dst)     # flat (x, y) -> frame (u, v), as flatten() uses it
+    out = []
+    for x, y in dst:
+        x += dx; y += dy; d = k[6] * x + k[7] * y + 1
+        out.append([round(float((k[0] * x + k[1] * y + k[2]) / d), 1), round(float((k[3] * x + k[4] * y + k[5]) / d), 1)])
+    return out
 
 def _seg_boxes(x, y, w, h, t, sk):
     m = y + h // 2
@@ -117,8 +131,10 @@ def learn_seg_thr(hist):
 def _cell(i, vals, seg_thr):
     v = [vals[f"{i}{s}"] for s in "abcdefg"]
     fallback = max(DIGIT_MIN, DIGIT_FRAC * max(v))
-    segs = tuple(1 if x > seg_thr.get(f"{i}{s}", fallback) else 0 for x, s in zip(v, "abcdefg"))
-    return ("blank" if segs == (0,) * 7 else DIG.get(segs, "?")), segs, [round(x) for x in v]
+    cut = [seg_thr.get(f"{i}{s}", fallback) for s in "abcdefg"]
+    segs = tuple(1 if x > c else 0 for x, c in zip(v, cut))
+    margin = min(abs(x - c) for x, c in zip(v, cut))     # how close the least certain segment is to its cut-off
+    return ("blank" if segs == (0,) * 7 else DIG.get(segs, "?")), segs, [round(x) for x in v], margin
 
 METHOD = "glass_share-v1+seg_contrast-v1"   # bump when scores change meaning: monitor resets trust and learned icons
 
@@ -150,8 +166,9 @@ def read(path, geom, learned=None):
             out["provisional"].append(name)
     out["seg_values"] = {k: round(v, 1) for k, v in seg_values(contrast(a)).items()}
     cells = [_cell(i, out["seg_values"], geom.get("seg_thr") or {}) for i in range(len(c["digits"]["cells"]))]
-    out["digit_cells"] = [{"digit": d, "segs": s, "values": v} for d, s, v in cells]
-    digs = [d for d, _, _ in cells]
+    out["digit_cells"] = [{"digit": d, "segs": s, "values": v} for d, s, v, _ in cells]
+    out["seg_margin"] = round(min(m for _, _, _, m in cells), 1)
+    digs = [d for d, _, _, _ in cells]
     if "?" in digs or digs[2] == "blank" or (digs[1] == "blank" and digs[0] != "blank"):
         out["temperature_f"] = None            # not a plain number: blank screen, or an error code like E04
     else:

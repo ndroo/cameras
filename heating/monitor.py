@@ -43,14 +43,16 @@ MODEL_DEFAULT = "claude-opus-5-5"
 CONFIRM_MODEL_DEFAULT = "claude-opus-5-5"
 ZONE_FALLBACK_MODEL = "claude-opus-5-5"   # Sonnet twice called a dark zone-1 LED lit; Opus/Haiku 10/10
 
-# Fixed-view crops (x1,y1,x2,y2) used to give the model a zoomed view of the small
-# indicators. Re-tune if a camera is moved.
-ZONE_LED_CROP = (1040, 430, 1230, 640)      # Taco status LED column
+# The model's zoomed view of the Taco status LED column (x1,y1,x2,y2), in the zone anchor frame's
+# coordinates (see ZONE_ANCHOR_BOX); read_zone() moves it with the panel.
+ZONE_LED_CROP = (960, 447, 1150, 657)
 # The boiler LCD's position comes from lcd_recal (glass corners in the frame, found again
 # automatically when the camera is moved); the model's zoom is their bounding box widened by
 # LCD_PAD (x, y) on each side.
 LCD_PAD = (28, 12)
 RECAL_PROBATION = 8      # model checks after the LCD is re-found at a new camera position (~2 h)
+DRIFT_FOLLOW_PX = 4      # LCD this far off its reference (flat-image px; the alignment search stops at 6) ...
+DRIFT_CYCLES = 2         # ... on this many cycles in a row -> move the corners to it (lcd_recal.follow)
 PIXELS_MODE = os.environ.get("PIXELS_MODE", "on")   # on = pixel-first + model verifier; shadow = model reads, pixels logged; off = model only
 FULL_FRAME_WIDTH = 640                      # context frame sent alongside the zoom (cheap)
 LEGEND_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "fig51_legend.png")
@@ -65,10 +67,32 @@ LEGEND_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", 
 # the Opus fallback called one of them off. Centred discs of radius 5 with a 220 floor give
 # ON 0.89-1.00 and OFF 0.00-0.15 (the 0.15 is zone 2's pink glow from a lit zone 3); before, it was
 # ON 0.44-0.97 vs OFF 0.00-0.27.
-ZONE_LEDS = {"power": (1131, 462), "zone1": (1131, 486), "zone2": (1132, 509),
-             "zone3": (1131, 533), "zone4": (1131, 557)}
+#
+# The camera gets moved, so the centres are not fixed frame positions any more (2026-11-01: the view
+# shifted ~80 px, every disc sat on bare plastic, the power LED read dark and Opus was asked on every
+# cycle for 11 days). They are positions in the ANCHOR frame - the frame docs/zone_anchor.png (the
+# Taco logo, model name and LED labels, left of the LED column) was cut from at ZONE_ANCHOR_BOX:
+#   1. locate_zone() finds that patch in each frame (template match) -> the panel's offset.
+#   2. The power LED is always lit, so led_metrics() then centres on its white core. That takes out
+#      what a plain shift cannot: against 9 stills from the old camera position the patch alone put
+#      the LEDs 2-4 px off (the view also turned ~2 degrees).
+#   3. Each disc may sit up to ZONE_NUDGE px off its expected centre (the best position counts), for
+#      the turn that is left over at the far end of the column.
+# Centres measured 2026-11-12 on 182 stills (zone 2 and zone 4 from the line through the others:
+# zone 2's core was small in its 8 lit frames, zone 4 never lit).
+ZONE_LEDS = {"power": (1051, 479), "zone1": (1052, 502), "zone2": (1053, 526),
+             "zone3": (1053, 549), "zone4": (1054, 573)}
+ZONE_ANCHOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "zone_anchor.png")
+ZONE_ANCHOR_BOX = (878, 400, 1038, 556)   # where the patch sits in the anchor frame
+ZONE_MIN_MATCH = 0.6         # patch match below this = panel not in view (same view 0.97+, old view 0.84)
+ZONE_POWER_SEARCH = 10       # px around the expected power LED searched for its white core
+ZONE_POWER_MIN_PX = 40       # white-hot pixels that make a core (the power LED's is ~190)
+ZONE_NUDGE = 2
 LED_RADIUS = 5
-LED_WHITE_MIN = 220          # per-channel floor for a "white-hot" pixel
+# Floor 220 -> 240 on 2026-11-12: in the new view zone 2's pink glow from a lit zone 3 reached
+# 0.22-0.56 at 220 (the ambiguous band, 23 of 24 such frames, and Opus called 4 of them lit); at
+# 240 it is 0.00-0.04, while lit LEDs stay at 0.93-1.00 (182 stills; the 9 old-view stills agree).
+LED_WHITE_MIN = 240          # per-channel floor for a "white-hot" pixel
 LED_ON_FRAC = 0.5            # white fraction at or above this = ON
 LED_AMBIGUOUS = (0.25, 0.75) # between calibrated OFF (<= 0.15) and ON (>= 0.89), with room for a 2 px nudge -> ask the model
 
@@ -163,9 +187,10 @@ def b64_image(path, crop=None, zoom=1, width=None):
 
 
 def boiler_pixels(out, p):
-    """Pixel read of the boiler LCD at its current geometry. If the LCD no longer registers (camera
-    moved) or an admin asked for it, find the LCD again from the anchor frame (lcd_recal) and read
-    again. Returns (px, lcd) - lcd: the zoom crop, corners, and what any recalibration did."""
+    """Pixel read of the boiler LCD at its current geometry. If the LCD has crept off its reference,
+    move the corners after it; if it no longer registers at all (camera moved) or an admin asked for
+    it, find the LCD again from the anchor frame (lcd_recal). Then read again. Returns (px, lcd) -
+    lcd: the zoom crop, corners, and what any recalibration did."""
     import lcd_pixels, lcd_recal
     trust = load_trust(out)
     learned = trust["learned_icons"] if trust.get("pixel_method") == lcd_pixels.METHOD else {}
@@ -173,7 +198,29 @@ def boiler_pixels(out, p):
     px = lcd_pixels.read(p, {**g, "ref": lcd_recal.load_ref(out, g)}, learned=learned)
     recal = None
     forced = lcd_recal.requested(out)
-    if forced or not px.get("ok"):
+    # A camera that creeps (the LCD slid 8 flat px in three weeks, Nov 2026) never fails registration
+    # outright: the LCD just reaches the limit of the alignment search and the boxes come off their
+    # icons. Follow it before it gets there.
+    reg = px.get("register") or {}
+    off_centre = bool(px.get("ok")) and max(abs(reg.get("dx", 0)), abs(reg.get("dy", 0))) >= DRIFT_FOLLOW_PX
+    g["drift_n"] = g.get("drift_n", 0) + 1 if off_centre else 0
+    if g["drift_n"] >= DRIFT_CYCLES and not forced:
+        recal = {"why": f"LCD ({reg['dx']}, {reg['dy']}) px off its reference for {g['drift_n']} cycles - camera drifting"}
+        try:
+            g2, stats = lcd_recal.follow(out, p, g)
+        except Exception as e:
+            g2, stats = None, {"error": f"{type(e).__name__}: {str(e)[:160]}"}
+        recal.update(stats)
+        g["drift_n"] = 0
+        if g2:
+            g = g2
+            px = lcd_pixels.read(p, {**g, "ref": lcd_recal.load_ref(out, g)}, learned=learned)
+            recal["adopted"] = True
+            log(f"boiler: LCD followed ({recal['why']}): corners {g['corners']}, {stats}")
+        else:
+            recal["adopted"] = False
+            log(f"boiler: LCD drift not followed ({recal['why']}): {stats.get('error')}")
+    elif forced or not px.get("ok"):
         recal = {"why": "admin request" if forced else px.get("error")}
         try:
             corners, stats = lcd_recal.find(out, p, g)
@@ -234,21 +281,65 @@ def analyze(client, model, prompt, images, schema, effort="low"):
         return {"_error": type(e).__name__, "_detail": str(e)[:200]}, usage
 
 
-def led_metrics(path):
-    """Per-LED pixel stats from the full frame: fraction of 'white core' pixels and mean
-    brightness inside a small disc at each LED's fixed position."""
-    im = Image.open(path).convert("RGB"); px = im.load(); out = {}
-    r2 = LED_RADIUS * LED_RADIUS
-    for name, (cx, cy) in ZONE_LEDS.items():
-        n = w = 0; tot = 0.0
-        for x in range(cx - LED_RADIUS, cx + LED_RADIUS + 1):
-            for y in range(cy - LED_RADIUS, cy + LED_RADIUS + 1):
-                if (x - cx) ** 2 + (y - cy) ** 2 > r2: continue
-                if not (0 <= x < im.width and 0 <= y < im.height): continue
-                r, g, b = px[x, y]; n += 1; tot += (r + g + b) / 3
-                if min(r, g, b) >= LED_WHITE_MIN: w += 1
-        out[name] = {"white": round(w / n, 3) if n else 0.0, "mean": round(tot / n) if n else 0}
-    return out
+def locate_zone(path):
+    """Where the Taco panel is in this frame: {"score", "dx", "dy"} - the anchor patch's match and
+    its offset from the anchor frame - or {"error"}. Found at half size anywhere in the frame, then
+    to the pixel at full size around that spot."""
+    try:
+        import cv2
+        g = cv2.imread(path, cv2.IMREAD_GRAYSCALE); t = cv2.imread(ZONE_ANCHOR, cv2.IMREAD_GRAYSCALE)
+        if g is None or t is None:
+            return {"error": "frame or docs/zone_anchor.png unreadable"}
+        half = lambda im: cv2.resize(im, (im.shape[1] // 2, im.shape[0] // 2), interpolation=cv2.INTER_AREA)
+        hx, hy = cv2.minMaxLoc(cv2.matchTemplate(half(g), half(t), cv2.TM_CCOEFF_NORMED))[3]
+        pad = 6
+        x0, y0 = max(0, 2 * hx - pad), max(0, 2 * hy - pad)
+        win = g[y0:y0 + t.shape[0] + 2 * pad, x0:x0 + t.shape[1] + 2 * pad]
+        if win.shape[0] < t.shape[0] or win.shape[1] < t.shape[1]:
+            return {"error": "panel at the edge of the frame"}
+        _, score, _, (fx, fy) = cv2.minMaxLoc(cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED))
+        if not 0 <= score <= 1.01:      # a featureless frame (lens covered, dark) gives nan / inf
+            return {"error": "frame has nothing to match"}
+        return {"score": round(float(score), 3), "dx": int(x0 + fx - ZONE_ANCHOR_BOX[0]), "dy": int(y0 + fy - ZONE_ANCHOR_BOX[1])}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+
+
+def led_metrics(path, off=(0, 0)):
+    """Per-LED pixel stats: fraction of 'white core' pixels and mean brightness inside a small disc
+    at each LED. `off` is the panel's offset from the anchor frame (locate_zone); the discs are then
+    centred on the power LED's white core. Returns (metrics, shift): shift = how far that core was
+    from where `off` put it, or None if there is no core there (power LED dark)."""
+    import numpy as np
+    a = np.asarray(Image.open(path).convert("RGB"))
+    hot = a.min(axis=2) >= LED_WHITE_MIN; grey = a.mean(axis=2); H, W = hot.shape
+    px0, py0 = ZONE_LEDS["power"][0] + off[0], ZONE_LEDS["power"][1] + off[1]
+    cx, cy, core = px0, py0, False
+    for _ in range(2):      # second pass re-centres the window, so a lit zone 1 below can't pull it
+        x0, y0 = max(0, int(round(cx)) - ZONE_POWER_SEARCH), max(0, int(round(cy)) - ZONE_POWER_SEARCH)
+        ys, xs = np.nonzero(hot[y0:int(round(cy)) + ZONE_POWER_SEARCH + 1, x0:int(round(cx)) + ZONE_POWER_SEARCH + 1])
+        if len(xs) < ZONE_POWER_MIN_PX:
+            core = False
+            break
+        cx, cy, core = x0 + xs.mean(), y0 + ys.mean(), True
+    shift = (int(round(cx)) - px0, int(round(cy)) - py0) if core else None
+    sx, sy = shift or (0, 0)
+    r = LED_RADIUS
+    disc = np.array([(x, y) for x in range(-r, r + 1) for y in range(-r, r + 1) if x * x + y * y <= r * r])
+    nudges = sorted(((nx, ny) for nx in range(-ZONE_NUDGE, ZONE_NUDGE + 1) for ny in range(-ZONE_NUDGE, ZONE_NUDGE + 1)),
+                    key=lambda n: n[0] ** 2 + n[1] ** 2)     # ties go to the expected centre
+    out = {}
+    for name, (lx, ly) in ZONE_LEDS.items():
+        best = (0.0, 0.0)
+        for nx, ny in nudges:
+            xs, ys = disc[:, 0] + lx + off[0] + sx + nx, disc[:, 1] + ly + off[1] + sy + ny
+            ok = (xs >= 0) & (xs < W) & (ys >= 0) & (ys < H)
+            if ok.any():
+                w = float(hot[ys[ok], xs[ok]].mean())
+                if w > best[0] or (nx, ny) == (0, 0):
+                    best = (w, float(grey[ys[ok], xs[ok]].mean()))
+        out[name] = {"white": round(best[0], 3), "mean": round(best[1])}
+    return out, shift
 
 
 def zone_from_pixels(m):
@@ -475,6 +566,7 @@ def needs_confirmation(r, prev=None):
 #     never got there: both models misread the same frame now and then (117 read as 119, lit pump
 #     icons read as off) and each such "miss" sent a 200-long streak back to zero.
 #   - A failed arbiter call is no evidence either way and leaves the record alone.
+#   - Clear pixel evidence is not put to the arbiter at all (_pixels_clear below).
 # ---------------------------------------------------------------------------------------
 PIXEL_FIELDS = ("mode", "flame_on", "boiler_pump", "ch_pump", "temperature")   # fan_on is pixel-read but not compared: the models misread it
 TRUST_WINDOW = 200        # model checks per field in the rolling trust record (~2 days at 15 min)
@@ -491,6 +583,44 @@ ALERT_ON_PIXEL_MISS = ("mode", "temperature")   # arbiter siding with the model 
 # outside anything seen at calibration (drift, glare, a half-lit segment) - ask the model even
 # when the field is trusted.
 GAP_ICONS = ("radiator", "dhw_box", "flame", "boiler_pump", "ch_pump")
+
+
+# A never-confirmed icon the pixels call lit but both models call off: after this many such rulings
+# the box is taken to be misreading (drift, a shadow) and stops costing two model calls a cycle
+# (the sun box did that 75 times a day, 8-12 Nov 2026). It is looked at again whenever the model is
+# consulted for another reason, and the count starts over when the LCD is re-found or followed.
+PROV_REJECT_LIMIT = 3
+# Pixel evidence a model does not get to overrule. Both models misread this LCD in the same ways:
+# its 7 has a hook (top-left bar lit), which they read as a 9 (16 of the 17 times the arbiter
+# overruled the temperature, 22 Oct - 12 Nov 2026; the kept frames show a 7 every time), and the
+# lit flame icon is grey rather than black in this camera's picture, so Sonnet called it off on 29
+# of 32 lit frames (10-12 Nov) and Opus on 3 (lit in every one looked at; the score is 0.38-0.49
+# lit and 0.00 off). With the arbiter sharing the misread, each one counted against the pixels
+# until trust was lost and the model was asked every cycle. So when
+#   - the digits decode with every segment at least SEG_CLEAR from its cut-off (lit and unlit
+#     segments sit ~10 either side; 87% of frames clear it), or
+#   - an icon is lit with a score at the lit end of its calibrated range (not _in_gap),
+# a disagreeing model is noted (source.clear), the pixels stand, the arbiter is not asked and the
+# trust record is left alone. Not during probation after the LCD has been re-found. Anything less
+# clear-cut (a segment near its cut-off, a half-dark icon, pixels off but model on, the mode)
+# still goes to the arbiter.
+SEG_CLEAR = 4.0
+CLEAR_LIT_ICONS = {"flame_on": "flame", "boiler_pump": "boiler_pump", "ch_pump": "ch_pump"}
+
+
+def _pixels_clear(f, px):
+    import lcd_pixels
+    if f == "temperature":
+        return px.get("temperature_f") is not None and (px.get("seg_margin") or 0) >= SEG_CLEAR
+    icon = CLEAR_LIT_ICONS.get(f)
+    if icon and px.get(icon):
+        ic = lcd_pixels._calib()["icons"][icon]
+        return ic.get("on_min") is not None and ic.get("off_max") is not None and not _in_gap(px["scores"][icon], ic["off_max"], ic["on_min"])
+    return False
+
+
+def _icon_rejected(trust, icon):
+    return trust.get("icon_rejects", {}).get(icon, 0) >= PROV_REJECT_LIMIT
 
 
 def _in_gap(score, off_max, on_min):
@@ -568,7 +698,7 @@ def load_trust(out):
     except Exception:
         t = {}
     t.setdefault("fields", {}); t.setdefault("learned_icons", {}); t.setdefault("cycles", 0)
-    t.setdefault("model_calls", 0); t.setdefault("disagreements", [])
+    t.setdefault("model_calls", 0); t.setdefault("disagreements", []); t.setdefault("icon_rejects", {})
     return t
 
 
@@ -605,7 +735,7 @@ def verify_reasons(px, cur, prev, trust):
                and _in_gap(px["scores"][n], icons[n]["off_max"], icons[n]["on_min"])]
         if gap:
             reasons.append("pixel score between calibrated off/on ranges: " + ", ".join(gap))
-    lit_prov = [n for n in px.get("provisional", []) if px.get(n)]
+    lit_prov = [n for n in px.get("provisional", []) if px.get(n) and not _icon_rejected(trust, n)]
     if lit_prov:
         reasons.append("unconfirmed icon lit: " + ", ".join(lit_prov))
     if trust.get("probation"):
@@ -646,14 +776,15 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
             log(f"boiler: pixel method {trust.get('pixel_method')} -> {lcd_pixels.METHOD}, trust reset")
             trust.setdefault("history", []).append({"method": trust.get("pixel_method"), "ended": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                                     "fields": trust["fields"], "learned_icons": trust["learned_icons"]})
-        trust["fields"] = {}; trust["learned_icons"] = {}; trust["pixel_method"] = lcd_pixels.METHOD
+        trust["fields"] = {}; trust["learned_icons"] = {}; trust["icon_rejects"] = {}; trust["pixel_method"] = lcd_pixels.METHOD
     _seed_recent(out, trust)
     usage = {"model": None, "input": 0, "output": 0, "cache_read": 0}
     if (lcd.get("recal") or {}).get("adopted"):
-        trust["probation"] = RECAL_PROBATION
+        trust["probation"] = RECAL_PROBATION; trust["icon_rejects"] = {}    # the boxes have moved
     cur = px_as_reading(px)
     prev = previous_boiler_reading(out)
     reasons = verify_reasons(px, cur, prev, trust)
+    on_probation = bool(trust.get("probation"))
     if trust.get("probation") and px.get("ok"):
         trust["probation"] -= 1
     cur["source"] = {"pixels": list(PIXEL_FIELDS), "model": [], "reasons": reasons, "verified_by": None, "arbiter": None}
@@ -716,10 +847,15 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
             thr = (px["scores"][icon] + (lcd_pixels._calib()["icons"][icon].get("off_max") or 0)) / 2
             trust["learned_icons"][icon] = {"thr": round(thr, 3), "score": px["scores"][icon],
                                             "confirmed": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": model}
+            trust["icon_rejects"].pop(icon, None)
             cur["notes"] += f" | {icon} icon confirmed lit by {model} -> box promoted"
         elif px_lit and not m_lit:
             cur[fld] = False    # off unless the arbiter sees it too
-            prov_px_only.append((fld, icon)); arbiter_q.append(fld)
+            if _icon_rejected(trust, icon):
+                cur["notes"] += (f" | {icon}: pixels lit (score {px['scores'][icon]}) but both models have called this box off "
+                                 f"{trust['icon_rejects'][icon]} times - reported off, arbiter not asked")
+            else:
+                prov_px_only.append((fld, icon)); arbiter_q.append(fld)
         elif m_lit and not px_lit:
             prov_model_only.append((fld, icon)); arbiter_q.append(fld)
     # An error code claimed by the model while the digits decode as a plain number is suspect.
@@ -729,6 +865,14 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
 
     # Compare the fields pixels own; escalate disagreements to the arbiter.
     disagree = [f for f in PIXEL_FIELDS if f not in cur["source"]["model"] and not _field_equal(f, cur.get(f), m.get(f))]
+    clear = [] if on_probation else [f for f in disagree if _pixels_clear(f, px)]
+    if clear:
+        disagree = [f for f in disagree if f not in clear]
+        cur["source"]["clear"] = {f: m.get(f) for f in clear}
+        cur["notes"] += " | " + ", ".join(f"{f}: {model} read {m.get(f)}" for f in clear) + " against clear pixels - pixels kept"
+        for f in clear:
+            st = trust["fields"].setdefault(f, {"streak": 0, "agree": 0, "disagree": 0})
+            st["clear_disputes"] = st.get("clear_disputes", 0) + 1
     arbiter_q += disagree
     cur["confidence"] = "high"
     verdict = {}
@@ -768,6 +912,7 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
                     cur["notes"] += f" | {icon}: pixels lit, {model} says off, {confirm_model} sees it -> lit, box promoted"
                 else:
                     verdict[fld] = "model"
+                    trust["icon_rejects"][icon] = trust["icon_rejects"].get(icon, 0) + 1
                     cur["notes"] += f" | {icon}: pixels lit but {model} and {confirm_model} say off (reported off; box still unconfirmed)"
             if "error_codes" in arbiter_q:
                 if arb.get("error_codes"):
@@ -793,7 +938,7 @@ def read_boiler(client, model, confirm_model, out, p, px, lcd, imgs_base):
         if f in cur["source"]["model"] and f not in cur.get("pixel_miss", []):
             continue    # the model supplied this field (digits didn't decode): nothing to compare
         st = trust["fields"].setdefault(f, {"streak": 0, "agree": 0, "disagree": 0})
-        if f in disagree and not arbiter_ok:
+        if f in clear or (f in disagree and not arbiter_ok):
             continue
         record_check(st, not (f in disagree and verdict.get(f) == "model"))
     cur["pump_on"] = bool(cur["boiler_pump"] or cur["ch_pump"] or cur["dhw_pump"]); cur["mode"] = derive_mode(cur)
@@ -810,20 +955,28 @@ def _trust_summary(t):
             "window": {f: [len(t["fields"].get(f, {}).get("recent") or []), (t["fields"].get(f, {}).get("recent") or []).count(0)]
                        for f in PIXEL_FIELDS},
             "trusted": [f for f in PIXEL_FIELDS if field_trusted(t["fields"].get(f))],
-            "learned_icons": sorted(t["learned_icons"])}
+            "learned_icons": sorted(t["learned_icons"]),
+            "ignored_icons": sorted(i for i in t.get("icon_rejects", {}) if _icon_rejected(t, i))}
 
 
 # ---------------------------------------------------------------------------------------
 # Zone LEDs: pixels decide, with a trust record like the boiler's (<out>/zone_trust.json).
-#   - The model is asked when an LED's white fraction is outside the calibrated ranges, the power LED is
-#     dark, it's time for an audit, or (until an LED has ZONE_TRUST_FULL agreements) an LED changed.
+#   - The model is asked when an LED's white fraction is outside the calibrated ranges, the view is
+#     suspect (panel not found in the frame, or its power LED dark), it's time for an audit, or
+#     (until an LED has ZONE_TRUST_FULL agreements) an LED changed.
 #   - Opus misread a dim-but-lit zone 1 (20 Oct 11:53), so it is NOT the referee here: it decides
-#     only gap LEDs (and everything when the power LED is dark, i.e. the view is suspect). A model
-#     disagreement on a clear pixel reading keeps the pixels, resets that LED's streak and is logged
-#     with the image name for a human to rule on.
+#     only gap LEDs (and everything when the view is suspect). A model disagreement on a clear pixel
+#     reading keeps the pixels, resets that LED's streak and is logged with the image name for a
+#     human to rule on.
+#   - A suspect view that stays suspect needs a person (re-aim the camera, or the panel has no
+#     power), not a model call every 15 minutes: after ZONE_SUSPECT_BURST cycles in a row the model
+#     is asked on every ZONE_SUSPECT_EVERY-th cycle only, and its last reading is kept in between
+#     (method "held").
 # ---------------------------------------------------------------------------------------
 ZONE_TRUST_FULL = 30            # agreements per LED before state changes stop triggering a model check
 ZONE_AUDIT_SECONDS = 6 * 3600   # trusted or not, ask the model at least this often
+ZONE_SUSPECT_BURST = 4          # suspect cycles in a row that each get a model read (1 h at 15 min)
+ZONE_SUSPECT_EVERY = 4          # after that, every this many cycles (hourly)
 
 
 def _zone_trust_path(out): return os.path.join(out, "zone_trust.json")
@@ -853,29 +1006,52 @@ def previous_zone_reading(out):
 def read_zone(client, out, p, zone_llm="auto"):
     """Pixel verdicts for the Taco LEDs, checked by the model when the trust rules call for it.
     Returns the result["zone"] entry."""
-    m = led_metrics(p)
-    px, gap = zone_from_pixels(m)
     trust = load_zone_trust(out)
-    reasons = []
-    if zone_llm != "never":
-        if zone_llm == "always":
-            reasons.append("forced")
-        if gap:
-            reasons.append("white fraction outside calibrated ranges: " + ", ".join(f"{k} {m[k]['white']:.2f}" for k in gap))
-        if not px["power"]:
-            reasons.append("power LED dark (panel off / camera moved)")
-        prev = previous_zone_reading(out)
-        changed = [k for k in ZONE_LEDS if isinstance(prev, dict) and k in prev and bool(prev[k]) != px[k]]
-        if changed and any(trust["leds"].get(k, {}).get("streak", 0) < ZONE_TRUST_FULL for k in ZONE_LEDS):
-            reasons.append(f"building trust (under {ZONE_TRUST_FULL} agreements); changed: " + ", ".join(changed))
-        if time.time() - (trust.get("last_model_check_ts") or 0) >= ZONE_AUDIT_SECONDS:
-            reasons.append("periodic audit")
+    view = locate_zone(p)
+    found = view.get("score") is not None and view["score"] >= ZONE_MIN_MATCH
+    if found:
+        trust["offset"] = [view["dx"], view["dy"]]
+    off = tuple(trust.get("offset") or (0, 0))      # panel not found: look where it last was
+    m, shift = led_metrics(p, off)
+    view["power_shift"] = list(shift) if shift else None
+    px, gap = zone_from_pixels(m)
+    view_suspect = not found or not px["power"]
+    prev = previous_zone_reading(out)
+    reasons = []; held = False
+    if view_suspect:
+        trust["suspect_streak"] = n = trust.get("suspect_streak", 0) + 1
+        why = "power LED dark (panel off / camera moved)" if found else \
+              "Taco panel not found in the frame (" + (view.get("error") or f"match {view.get('score')}") + ")"
+        has_prev = isinstance(prev, dict) and all(k in prev for k in ZONE_LEDS)
+        if zone_llm != "never":
+            if n <= ZONE_SUSPECT_BURST or (n - ZONE_SUSPECT_BURST) % ZONE_SUSPECT_EVERY == 0 or not has_prev:
+                reasons.append(why)
+            else:
+                held = True
+    else:
+        trust["suspect_streak"] = 0
+        if zone_llm != "never":
+            if gap:
+                reasons.append("white fraction outside calibrated ranges: " + ", ".join(f"{k} {m[k]['white']:.2f}" for k in gap))
+            changed = [k for k in ZONE_LEDS if isinstance(prev, dict) and k in prev and bool(prev[k]) != px[k]]
+            if changed and any(trust["leds"].get(k, {}).get("streak", 0) < ZONE_TRUST_FULL for k in ZONE_LEDS):
+                reasons.append(f"building trust (under {ZONE_TRUST_FULL} agreements); changed: " + ", ".join(changed))
+            if time.time() - (trust.get("last_model_check_ts") or 0) >= ZONE_AUDIT_SECONDS:
+                reasons.append("periodic audit")
+    if zone_llm == "always" and not reasons:
+        reasons.append("forced"); held = False
     reading = dict(px, method="pixels",
                    notes="white-hot fraction per LED: " + ", ".join(f"{k} {m[k]['white']:.2f}" for k in ZONE_LEDS))
-    entry = {"image": os.path.basename(p), "pixels": m, "reading": reading}
+    entry = {"image": os.path.basename(p), "pixels": m, "view": view, "reading": reading}
+    if held:
+        reading.update({k: bool(prev[k]) for k in ZONE_LEDS}, method="held", pixel_verdict=dict(px))
+        reading["notes"] += f" | {why}, {n} cycles in a row: last model reading kept, model asked every {ZONE_SUSPECT_EVERY} cycles"
     if not reasons:
+        save_zone_trust(out, trust)
         return entry
-    imgs = [b64_image(p, width=FULL_FRAME_WIDTH), b64_image(p, crop=ZONE_LED_CROP, zoom=4)]
+    sx, sy = shift or (0, 0)
+    crop = tuple(c + o for c, o in zip(ZONE_LED_CROP, (off[0] + sx, off[1] + sy) * 2))
+    imgs = [b64_image(p, width=FULL_FRAME_WIDTH), b64_image(p, crop=crop, zoom=4)]
     llm, usage = analyze(client, ZONE_FALLBACK_MODEL, ZONE_PROMPT, imgs, ZONE_SCHEMA)
     entry["usage"] = usage
     trust["model_calls"] += 1; trust["last_model_check_ts"] = time.time()
@@ -886,7 +1062,6 @@ def read_zone(client, out, p, zone_llm="auto"):
         return entry
     model = {k: bool(llm.get(k)) for k in ZONE_LEDS}
     reading["model"] = model
-    view_suspect = not px["power"]
     decide = list(ZONE_LEDS) if view_suspect else gap      # where the model's answer is used
     for k in decide:
         reading[k] = model[k]
@@ -981,7 +1156,7 @@ def cycle(client, model, out, zone_llm="auto", confirm_model=CONFIRM_MODEL_DEFAU
         result["boiler"] = {"image": os.path.basename(p), "reading": reading, "usage": usage,
                             "lcd": lcd}
         if px is not None:
-            result["boiler"]["pixels"] = {k: px.get(k) for k in ("ok", "error", "mode", "flame", "fan", "boiler_pump", "ch_pump", "dhw_box", "dhw_pump", "temperature_f", "register", "scores", "seg_values", "provisional") if k in px}
+            result["boiler"]["pixels"] = {k: px.get(k) for k in ("ok", "error", "mode", "flame", "fan", "boiler_pump", "ch_pump", "dhw_box", "dhw_pump", "temperature_f", "register", "scores", "seg_values", "seg_margin", "provisional") if k in px}
         if trust_summary:
             result["boiler"]["trust"] = trust_summary
         log("boiler:", json.dumps(reading))
