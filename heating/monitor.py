@@ -1068,7 +1068,10 @@ ZONE_AUDIT_SECONDS = 6 * 3600   # trusted or not, ask the model at least this of
 # one frame in six when it only glows pink beside a lit zone 3 (white 0.00-0.04); each of those reset
 # zone 2's streak, so it never reached ZONE_TRUST_FULL and every LED change kept costing a model call.
 # Such a disagreement is still logged, but only one inside this band resets the streak.
-ZONE_CLEAR = (0.05, 0.95)
+# Low end 0.05 -> 0.15 on 2026-11-13: in the first day live the glow reached 0.06 and 0.07 on two
+# of six such frames (all six looked at: a pink dot, no white core), which reset the streak twice.
+# 0.15 is the top of the calibrated OFF range; lit LEDs measured 0.90-1.00 that day.
+ZONE_CLEAR = (0.15, 0.85)
 ZONE_SUSPECT_BURST = 4          # suspect cycles in a row that each get a model read (1 h at 15 min)
 ZONE_SUSPECT_EVERY = 4          # after that, every this many cycles (hourly)
 
