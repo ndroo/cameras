@@ -10,16 +10,35 @@
 
 <section class="card" id="system">
   <h2>System</h2>
-  <p class="small">Tapo cloud link: <span class="dot {{ 'ok' if mqtt_ok else 'bad' }}"></span>{{ 'connected' if mqtt_ok else 'not connected' }}
-   · <a href="/admin/mqtt-log">raw device messages</a>
-   · <form method="post" action="/admin/test-sms" class="inline"><button class="link" data-busy="sending…">send me a test text</button></form></p>
-  <p class="small">Heating monitor: {% if heating.last %}last cycle {{ heating.last|ago }} ({{ 'ok' if heating.ok else 'had errors' }}){% else %}not run yet{% endif %}
-    <form method="post" action="/admin/heating/run" class="inline"><button class="link" data-busy="starting…">run a cycle now</button></form>
-    · <a href="/heating">dashboard</a></p>
-  {% if lcd %}<p class="small">Boiler camera: LCD position set {{ lcd.since }} ({{ lcd.how }}){% if lcd.pending %} · recalibration pending{% endif %}. It is found again automatically when the camera is moved.</p>{% endif %}
-  <p class="small">Watchdog: {% for w in watch %}<span class="dot {{ 'ok' if w.ok else 'bad' }}"></span>{{ w.url }} ({{ w.at|ago }}) {% endfor %}{% if not watch %}no checks yet{% endif %}</p>
-  <p class="small">Backup: {% if backup %}last {{ backup.at|ago }}, database {{ (backup.db / 1024) | int }} KB{% if backup.bucket %}, uploaded to the bucket{% else %}, local only (no bucket configured){% endif %}{% else %}none yet{% endif %}
-    <form method="post" action="/admin/backup" class="inline"><button class="link" data-busy="running…">back up now</button></form></p>
+  <div class="stiles">
+    <div class="stile">
+      <div class="sthead"><span class="dot {{ 'ok' if mqtt_ok else 'bad' }}"></span><b>Tapo cloud</b></div>
+      <p>{{ 'Connected.' if mqtt_ok else 'Not connected.' }} <span class="muted">Live view, alerts and camera controls all go through this.</span></p>
+      <div class="sact"><a class="btn" href="/admin/mqtt-log">Raw device messages</a></div>
+    </div>
+    <div class="stile">
+      {% set last_sms = recent_sms[0] if recent_sms else None %}
+      <div class="sthead"><span class="dot {{ 'unk' if not last_sms else ('bad' if last_sms.error else 'ok') }}"></span><b>Texts</b></div>
+      <p>{% if last_sms %}Last text {{ last_sms.at|ago }}{% if last_sms.error %}, <span class="err">it failed</span>{% endif %}.{% else %}None sent yet.{% endif %} <a href="#texts" data-tab="texts">See recent texts</a></p>
+      <div class="sact"><form method="post" action="/admin/test-sms"><button class="secondary small" data-busy="Sending…">Send me a test text</button></form></div>
+    </div>
+    <div class="stile">
+      <div class="sthead"><span class="dot {{ 'unk' if not heating.last else ('ok' if heating.ok else 'bad') }}"></span><b>Heating monitor</b></div>
+      <p>{% if heating.last %}Last check {{ heating.last|ago }}{{ '' if heating.ok else ', it had errors' }}.{% else %}Not run since the last restart.{% endif %} <span class="muted">Checks every {{ heating_every }} minutes.</span></p>
+      {% if lcd %}<p class="muted small">Boiler display found {{ lcd.since }} ({{ lcd.how }}){% if lcd.pending %}, recalibration pending{% endif %}. It is found again by itself if the camera moves.</p>{% endif %}
+      <div class="sact"><form method="post" action="/admin/heating/run"><button class="secondary small" data-busy="Starting…">Run a check now</button></form><a class="btn" href="/heating">Dashboard</a></div>
+    </div>
+    <div class="stile">
+      <div class="sthead"><span class="dot {{ 'unk' if not watch else ('ok' if watch|selectattr('ok')|list|length == watch|length else 'bad') }}"></span><b>Watchdog</b></div>
+      <p class="muted">Texts admins if one of these sites fails twice in a row.</p>
+      <ul class="slist">{% for w in watch %}<li><span class="dot {{ 'ok' if w.ok else 'bad' }}"></span>{{ w.url.split('//')[-1].rstrip('/') }} <span class="muted">{{ w.at|ago }}</span></li>{% else %}<li class="muted">No checks yet.</li>{% endfor %}</ul>
+    </div>
+    <div class="stile">
+      <div class="sthead"><span class="dot {{ 'unk' if not backup else ('ok' if backup.bucket else 'bad') }}"></span><b>Backup</b></div>
+      <p>{% if backup %}Last backup {{ backup.at|ago }}, {{ (backup.db / 1024)|int }} KB{% if backup.bucket %}, saved to the bucket.{% else %}, <span class="err">kept on this server only (no bucket set up)</span>.{% endif %}{% else %}None yet.{% endif %} <span class="muted">Runs nightly.</span></p>
+      <div class="sact"><form method="post" action="/admin/backup"><button class="secondary small" data-busy="Backing up…">Back up now</button></form></div>
+    </div>
+  </div>
 </section>
 
 <section class="card" id="houses">
@@ -83,17 +102,27 @@
 </section>
 
 <section class="card" id="groups">
-  <h2>Groups</h2>
-  <p class="muted small">A group belongs to one house. Its members can watch the house's cameras (all of them, or just the ticked ones) and get the texts it has turned on.</p>
-  {% for g in groups %}
-  <details class="group">
-    <summary><b>{{ g.name }}</b> <span class="muted">· {{ g.house_name }} · {{ members.get(g.id, [])|join(', ') or 'no members' }}
-      · {{ 'all cameras' if g.all_cameras else (gcams.get(g.id, [])|join(', ') or 'no cameras') }}
-      {% if g.notify_doorbell %}· 🔔 doorbell{% endif %}{% if g.notify_tamper %}· ⚠️ tamper{% endif %}{% if g.notify_offline %}· 📴 offline{% endif %}{% if g.notify_motion %}· 🚶 motion{% endif %}</span></summary>
-    {% with g=g %}{% include "group_form.html" %}{% endwith %}
-  </details>
+  <div class="secHead"><h2>Groups</h2><button type="button" class="small" data-edit="g-new">+ New group</button></div>
+  <p class="muted small">A group gives people access to one property's cameras, and decides which texts they get.</p>
+  <div class="gcard gnew" id="g-new" hidden><div class="gedit">{% with g=None %}{% include "group_form.html" %}{% endwith %}</div></div>
+  {% for h in houses %}
+  <h3 class="propHead">{{ h.name }}</h3>
+  {% for g in groups if g.house_id == h.id %}
+  <div class="gcard" id="g-{{ g.id }}">
+    <div class="gsum">
+      <div class="gtitle"><b>{{ g.name }}</b><button type="button" class="secondary small" data-edit="g-{{ g.id }}">Edit</button></div>
+      <dl class="gfacts">
+        <dt>People</dt><dd>{% for n in members.get(g.id, []) %}<span class="tagc">{{ n }}</span>{% else %}<span class="muted">Nobody yet</span>{% endfor %}</dd>
+        <dt>Can watch</dt><dd>{% if g.all_cameras %}<span class="tagc">Every camera</span>{% else %}{% for n in gcams.get(g.id, []) %}<span class="tagc">{{ n }}</span>{% else %}<span class="err">No cameras</span>{% endfor %}{% endif %}</dd>
+        <dt>Texts</dt><dd>{% set any = namespace(on=false) %}{% for k in alert_kinds %}{% if g['notify_' ~ k] %}{% set any.on = true %}<span class="tagc alert">{{ alert_kinds[k] }}</span>{% endif %}{% endfor %}{% if not any.on %}<span class="muted">None</span>{% endif %}</dd>
+      </dl>
+    </div>
+    <div class="gedit" hidden>{% include "group_form.html" %}</div>
+  </div>
+  {% else %}
+  <p class="muted small gnone">No groups yet. Only admins can see these cameras.</p>
   {% endfor %}
-  <details class="group"><summary><b>+ New group</b></summary>{% with g=None %}{% include "group_form.html" %}{% endwith %}</details>
+  {% endfor %}
 </section>
 
 <section class="card" id="texts">

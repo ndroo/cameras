@@ -270,6 +270,10 @@ def login_code(request: Request, ident: str = Form(...), code: str = Form(""), p
 
 ALERT_LABELS = {"doorbell": "Doorbell pressed", "tamper": "Camera tampered with",
                 "offline": "Camera offline / back online", "motion": "Motion / person"}
+ALERT_HELP = {"doorbell": "Someone presses a doorbell at this property.",
+              "tamper": "A camera is covered, knocked or moved.",
+              "offline": f"A camera has been offline for {OFFLINE_ALERT_SECS // 60} minutes, and again when it's back.",
+              "motion": "Every motion or person detection. Noisy, best left off."}
 
 
 def _my_alert_groups(me):
@@ -288,7 +292,14 @@ def _my_alert_groups(me):
 def account(request: Request, msg: str = "", err: str = ""):
     me = require(request)
     sessions = db.one("SELECT COUNT(*) n FROM sessions WHERE person_id=?", me["id"])["n"]
-    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions, alert_groups=_my_alert_groups(me))
+    groups = _my_alert_groups(me)
+    # one row per kind of text, one column per group: None where that group doesn't send it
+    rows = []
+    for k in db.ALERT_KINDS:
+        cells = [next((x for x in g["kinds"] if x["kind"] == k), None) for g in groups]
+        if any(cells):
+            rows.append({"kind": k, "label": ALERT_LABELS[k], "help": ALERT_HELP[k], "cells": cells})
+    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions, alert_groups=groups, alert_rows=rows)
 
 
 @app.post("/account/alerts")
@@ -1506,9 +1517,12 @@ def admin(request: Request, msg: str = ""):
     for r in db.q("SELECT gm.group_id, gm.muted, p.id, p.name FROM group_members gm JOIN people p ON p.id=gm.person_id ORDER BY p.name"):
         members.setdefault(r["group_id"], []).append(r["name"])
         roster.setdefault(r["group_id"], []).append({"id": r["id"], "name": r["name"], "muted": db.muted_set(r["muted"])})
-    gcams = {}
-    for r in db.q("SELECT gc.group_id, c.name FROM group_cameras gc JOIN cameras c ON c.id=gc.camera_id ORDER BY c.name"):
+    gcams, member_ids, gcam_ids = {}, {}, {}
+    for r in db.q("SELECT gc.group_id, c.id, c.name FROM group_cameras gc JOIN cameras c ON c.id=gc.camera_id ORDER BY c.sort, c.name"):
         gcams.setdefault(r["group_id"], []).append(r["name"])
+        gcam_ids.setdefault(r["group_id"], set()).add(r["id"])
+    for gid, rows in roster.items():
+        member_ids[gid] = {m["id"] for m in rows}
     recent_sms = db.q("SELECT * FROM sms_log ORDER BY at DESC LIMIT 15")
     watch = []
     for r in db.q("SELECT k, v FROM kv WHERE k LIKE 'watch:%'"):
@@ -1521,8 +1535,8 @@ def admin(request: Request, msg: str = ""):
     except Exception:
         lcd = None
     return render(request, "admin.html", houses=houses, cams=cams, people=people, groups=groups, members=members,
-                  roster=roster, alert_kinds=ALERT_LABELS, gcams=gcams, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
-                  heating=_heating_state, watch=watch, backup=backup, lcd=lcd)
+                  roster=roster, alert_kinds=ALERT_LABELS, alert_help=ALERT_HELP, gcams=gcams, member_ids=member_ids, gcam_ids=gcam_ids, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
+                  heating=_heating_state, heating_every=HEATING_EVERY // 60, watch=watch, backup=backup, lcd=lcd)
 
 
 @app.post("/admin/house")
@@ -1628,8 +1642,10 @@ async def admin_group(request: Request):
     gid = int(f.get("id") or 0)
     if gid and f.get("delete"):
         db.run("DELETE FROM groups WHERE id=?", gid)
-        return RedirectResponse("/admin", status_code=303)
-    vals = (f.get("name", "").strip(), int(f.get("house_id") or 0), 1 if f.get("all_cameras") else 0,
+        return RedirectResponse("/admin#groups", status_code=303)
+    house_id = int(f.get("house_id") or 0)
+    all_cams = 1 if f.get("all_cameras") == "1" else 0
+    vals = (f.get("name", "").strip(), house_id, all_cams,
             1 if f.get("notify_doorbell") else 0, 1 if f.get("notify_tamper") else 0,
             1 if f.get("notify_offline") else 0, 1 if f.get("notify_motion") else 0)
     if gid:
@@ -1649,9 +1665,12 @@ async def admin_group(request: Request):
             muted = before.get(pid, "")
         db.run("INSERT OR IGNORE INTO group_members(group_id,person_id,muted) VALUES(?,?,?)", gid, pid, muted)
     db.run("DELETE FROM group_cameras WHERE group_id=?", gid)
-    for cid in f.getlist("cameras"):
-        db.run("INSERT OR IGNORE INTO group_cameras(group_id,camera_id) VALUES(?,?)", gid, int(cid))
-    return RedirectResponse("/admin", status_code=303)
+    if not all_cams:
+        own = {r["id"] for r in db.q("SELECT id FROM cameras WHERE house_id=?", house_id)}
+        for cid in f.getlist("cameras"):
+            if int(cid) in own:
+                db.run("INSERT OR IGNORE INTO group_cameras(group_id,camera_id) VALUES(?,?)", gid, int(cid))
+    return RedirectResponse("/admin#groups", status_code=303)
 
 
 @app.post("/admin/test-sms")
