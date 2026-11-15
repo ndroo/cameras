@@ -1325,15 +1325,52 @@ def heating_cycle():
     return ok
 
 
-def _prune_stills(keep_days=2, keep_disputed_days=30):
+def _alert_stills():
+    """Still filenames the alert history points to: newer alerts name them, older ones are
+    matched to the reading taken at the same moment."""
+    keep, want = set(), set()
+    try:
+        for line in open(os.path.join(HEATING_OUT, "alerts.jsonl")):
+            try:
+                a = json.loads(line)
+            except Exception:
+                continue
+            if a.get("image"):
+                keep.add(a["image"])
+            elif a.get("timestamp"):
+                want.add(a["timestamp"])
+        if want:
+            for line in open(os.path.join(HEATING_OUT, "readings.jsonl")):
+                m = re.search(r'"timestamp": "([^"]+)"', line[:200])
+                if m and m.group(1) in want:
+                    img = (json.loads(line).get("boiler") or {}).get("image")
+                    if img:
+                        keep.add(img)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.info("alert stills: %s", e)
+    return keep
+
+
+def _prune_stills(keep_days=2, keep_disputed_days=30, keep_alert_days=90):
     """Timestamped stills pile up fast; keep two days of them (the *_latest.jpg files stay).
-    Frames where the arbiter overruled the pixels (disputed_*) are kept a month for review."""
+    Frames where the arbiter overruled the pixels (disputed_*) are kept a month for review, and the
+    boiler still behind each alert is kept 90 days so the dashboard can show what the screen said."""
     now = time.time()
+    alert_stills = _alert_stills()
+    try:
+        # which alert stills exist, so the dashboard only links pictures it can show
+        have = sorted(f for f in alert_stills if os.path.exists(os.path.join(HEATING_OUT, f)))
+        with open(os.path.join(HEATING_OUT, "alert_stills.json"), "w") as fh:
+            json.dump(have, fh)
+    except Exception as e:
+        log.info("alert stills list: %s", e)
     try:
         for f in os.listdir(HEATING_OUT):
             if f.endswith(".jpg") and "_latest" not in f:
                 p = os.path.join(HEATING_OUT, f)
-                days = keep_disputed_days if f.startswith("disputed_") else keep_days
+                days = keep_alert_days if f in alert_stills else keep_disputed_days if f.startswith("disputed_") else keep_days
                 if os.path.getmtime(p) < now - days * 86400:
                     os.remove(p)
     except Exception:
@@ -1368,6 +1405,8 @@ def heating_root():
 @app.get("/heating/{page}")
 def heating_page(page: str = ""):
     """Legend and history pages, plus the data the site's dashboard reads. Public on purpose."""
+    if page == "dashboard.js":       # the one copy of the dashboard script; the 180 Beatrice page loads it too
+        return FileResponse(os.path.join(HEATING_DIR, "dashboard.js"), media_type="text/javascript", headers={"Cache-Control": "no-cache"})
     name = HEATING_PAGES.get(page)
     if not name:
         raise HTTPException(404)
