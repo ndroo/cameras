@@ -75,7 +75,8 @@ for (const b of document.querySelectorAll("[data-cancel]")) b.addEventListener("
 
 // only the chosen property's cameras are offered; "every camera" greys the list out
 function syncGroupForm(form) {
-  const house = form.querySelector("[data-house]").value;
+  const houseEl = form.querySelector("[data-house]"); if (!houseEl) return;   // not a group form (e.g. garage)
+  const house = houseEl.value;
   const all = form.querySelector("input[name=all_cameras][value='1']").checked;
   const pick = form.querySelector(".camPick"); let n = 0;
   for (const chip of pick.querySelectorAll(".pchip")) {
@@ -88,10 +89,24 @@ function syncGroupForm(form) {
 for (const form of document.querySelectorAll("form.gform")) {
   syncGroupForm(form);
   form.addEventListener("change", ev => { if (ev.target.matches("[data-house], input[name=all_cameras]")) syncGroupForm(form); });
+  const camPick = form.querySelector(".camPick"); if (!camPick) continue;   // garage form has no camera picker
   // ticking a camera means "only some"
-  form.querySelector(".camPick").addEventListener("click", ev => {
+  camPick.addEventListener("click", ev => {
     if (!ev.target.closest(".pchip")) return;
     const some = form.querySelector("input[name=all_cameras][value='0']");
     if (!some.checked) { some.checked = true; syncGroupForm(form); }
   });
 }
+
+
+// ---------------------------------------------------------------- garage: test the relay answers
+for (const b of document.querySelectorAll("[data-test]")) b.addEventListener("click", async () => {
+  const out = document.getElementById("optest-" + b.dataset.test);
+  b.disabled = true; if (out) { out.textContent = "checking…"; out.className = "small muted"; }
+  try {
+    const r = await fetch(`/admin/garage/${b.dataset.test}/test`, { method: "POST", credentials: "same-origin" });
+    const j = await r.json();
+    if (out) { out.textContent = j.ok ? "✓ reachable" : "✗ " + (j.error || "no answer"); out.className = "small " + (j.ok ? "ok-txt" : "err"); }
+  } catch (e) { if (out) { out.textContent = "✗ " + e; out.className = "small err"; } }
+  b.disabled = false;
+});

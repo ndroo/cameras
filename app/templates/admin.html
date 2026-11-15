@@ -4,7 +4,7 @@
 {% if msg %}<p class="notice">{{ msg }}</p>{% endif %}
 <div class="adminLayout">
 <nav class="adminNav" id="adminNav" aria-label="Admin sections">
-  <a href="#cameras">Cameras</a><a href="#people">People</a><a href="#groups">Groups</a><a href="#houses">Houses</a><a href="#system">System</a><a href="#texts">Recent texts</a>
+  <a href="#cameras">Cameras</a><a href="#garage">Garage</a><a href="#people">People</a><a href="#groups">Groups</a><a href="#houses">Houses</a><a href="#system">System</a><a href="#texts">Recent texts</a>
 </nav>
 <div class="adminBody">
 
@@ -117,6 +117,26 @@
   <p class="muted small gnone">No groups yet. Only admins can see these cameras.</p>
   {% endfor %}
   {% endfor %}
+</section>
+
+<section class="card" id="garage">
+  <div class="secHead"><h2>Garage openers</h2></div>
+  <p class="muted small">A local relay (e.g. a Shelly on your wifi) wired across the opener's button — or across a spare remote's button. No myQ, no cloud. Assign it to a property and a camera, and an admin-only <b>Open garage door</b> button appears on that camera.</p>
+  {% for o in openers %}
+  <div class="gcard" id="op-{{ o.id }}">
+    <div class="gsum"><div class="gtitle"><b>{{ o.name }}</b>
+      <span><button type="button" class="secondary small" data-edit="op-{{ o.id }}">Edit</button></span></div>
+      <dl class="gfacts">
+        <dt>Property</dt><dd>{{ o.house_name or '—' }}</dd>
+        <dt>Camera</dt><dd>{% if o.cam_name %}<span class="tagc">{{ o.cam_name }}</span>{% else %}<span class="muted">not assigned</span>{% endif %}</dd>
+        <dt>Relay</dt><dd>{{ o.host or '<span class="err">no address</span>'|safe }} <span class="muted">· ch {{ o.relay }} · {{ o.pulse }}s pulse</span> <button type="button" class="link small" data-test="{{ o.id }}">Test connection</button> <span class="small" id="optest-{{ o.id }}"></span></dd>
+      </dl>
+    </div>
+    <div class="gedit" hidden>{% with o=o %}{% include "garage_form.html" %}{% endwith %}</div>
+  </div>
+  {% else %}<p class="muted small">No openers yet.</p>{% endfor %}
+  <div class="gcard gnew" id="op-new" hidden><div class="gedit">{% with o=None %}{% include "garage_form.html" %}{% endwith %}</div></div>
+  <button type="button" class="small" data-edit="op-new" style="margin-top:10px">+ Add opener</button>
 </section>
 
 <section class="card" id="texts">
