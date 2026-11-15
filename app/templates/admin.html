@@ -26,7 +26,7 @@
       <div class="sthead"><span class="dot {{ 'unk' if not heating.last else ('ok' if heating.ok else 'bad') }}"></span><b>Heating monitor</b></div>
       <p>{% if heating.last %}Last check {{ heating.last|ago }}{{ '' if heating.ok else ', it had errors' }}.{% else %}Not run since the last restart.{% endif %} <span class="muted">Checks every {{ heating_every }} minutes.</span></p>
       {% if lcd %}<p class="muted small">Boiler display found {{ lcd.since }} ({{ lcd.how }}){% if lcd.pending %}, recalibration pending{% endif %}. It is found again by itself if the camera moves.</p>{% endif %}
-      <div class="sact"><form method="post" action="/admin/heating/run"><button class="secondary small" data-busy="Starting…">Run a check now</button></form><a class="btn" href="/heating">Dashboard</a></div>
+      <div class="sact"><a class="btn" href="/heating">Dashboard</a></div>
     </div>
     <div class="stile">
       <div class="sthead"><span class="dot {{ 'unk' if not watch else ('ok' if watch|selectattr('ok')|list|length == watch|length else 'bad') }}"></span><b>Watchdog</b></div>

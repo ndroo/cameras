@@ -1394,13 +1394,6 @@ def heating_doc(name: str):
     return FileResponse(p)
 
 
-@app.post("/admin/heating/run")
-def admin_heating_run(request: Request):
-    require(request, admin=True)
-    threading.Thread(target=heating_cycle, daemon=True).start()
-    return RedirectResponse("/admin?msg=Heating+cycle+started", status_code=303)
-
-
 # Boiler LCD recalibration has no button or route: it re-finds the LCD by itself when the camera
 # moves. To force it, touch $DATA_DIR/heating/stills/lcd_recalibrate on the volume, e.g.
 #   fly ssh console -C "touch /data/heating/stills/lcd_recalibrate"
