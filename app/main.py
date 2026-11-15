@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import audio, db, rtsp, sms, tapo
+from . import audio, db, garage, rtsp, sms, tapo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("app")
@@ -426,6 +426,17 @@ def home(request: Request):
     return _remember_house(r, pick) if setc else r
 
 
+def _opener_for_cam(cam_id):
+    return db.one("SELECT * FROM garage_openers WHERE camera_id=?", cam_id)
+
+
+def _opener_view(opener, me):
+    """What the camera page/wall needs about an assigned opener (admin-only control for now)."""
+    if not opener or not me["is_admin"]:
+        return None
+    return {"id": opener["id"], "name": opener["name"], "state": garage.door_state(opener)}
+
+
 @app.get("/cam/{cam_id}", response_class=HTMLResponse)
 async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     me = require(request)
@@ -439,7 +450,8 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
     data = {"camId": cam_id, "name": cam["name"], "date": date, "dayStart": day_start, "dayEnd": day_end, "at": int(at) if at.isdigit() else 0,
             "maxClip": MAX_CLIP_SECONDS, "maxDownload": MAX_DOWNLOAD_SECONDS, "rotate": cam["rotate"], "flipH": cam["flip_h"], "flipV": cam["flip_v"],
             "isAdmin": bool(me["is_admin"]), "tz": str(TZ), "ptz": bool(cam["ptz"]) and bool(me["is_admin"]),
-            "canPause": bool(me["is_admin"]), "privacy": _privacy_info(cam_id, me)}
+            "canPause": bool(me["is_admin"]), "privacy": _privacy_info(cam_id, me),
+            "opener": _opener_view(_opener_for_cam(cam_id), me)}
     return render(request, "cam.html", cam=cam, sd=sd, me=me, data=json.dumps(data))
 
 
@@ -447,9 +459,11 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
 def wall(request: Request):
     me = require(request)
     pick, house_list, rows, setc = _house_filter(request, db.person_cameras(me))
+    openers = {o["camera_id"]: o for o in db.q("SELECT * FROM garage_openers WHERE camera_id IS NOT NULL")} if me["is_admin"] else {}
     cams = [{"id": c["id"], "name": c["name"], "house": c["house_name"], "online": c["online"], "rotate": c["rotate"], "flipH": c["flip_h"],
              "flipV": c["flip_v"], "thumbAt": int(c["thumb_at"] or 0), "private": bool(db.privacy_active(c["id"])),
-             "sd": sd_info(c)} for c in rows]
+             "sd": sd_info(c),
+             "opener": ({"id": openers[c["id"]]["id"], "name": openers[c["id"]]["name"]} if c["id"] in openers else None)} for c in rows]
     r = render(request, "wall.html", me=me, data=json.dumps(cams), house_pick=pick, house_list=house_list)
     return _remember_house(r, pick) if setc else r
 
@@ -501,6 +515,56 @@ async def cam_ptz(request: Request, cam_id: int, x: int = Form(0), y: int = Form
         log.warning("ptz %s: %s", cam["name"], e)
         return JSONResponse({"ok": False, "error": "The camera did not move. Try again."}, status_code=502)
     return JSONResponse({"ok": True})
+
+
+@app.post("/garage/{opener_id}/press")
+async def garage_press(request: Request, opener_id: int):
+    """One momentary press (open/close). Admin-only, like pan/tilt and privacy."""
+    me = require(request, admin=True)
+    op = db.one("SELECT * FROM garage_openers WHERE id=?", opener_id)
+    if not op:
+        raise HTTPException(404)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, garage.press, op)
+    except Exception as e:
+        log.warning("garage press %s: %s", op["name"], e)
+        return JSONResponse({"ok": False, "error": str(e)[:160]}, status_code=502)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", op["camera_id"]) if op["camera_id"] else None
+    if cam:
+        record_event(cam, "garage", f"{me['name']} pressed {op['name']}", notify=False)
+    return {"ok": True}
+
+
+@app.post("/admin/garage")
+def admin_garage(request: Request, id: int = Form(0), name: str = Form(""), house_id: int = Form(0),
+                 camera_id: int = Form(0), host: str = Form(""), auth: str = Form(""), relay: int = Form(0),
+                 pulse: float = Form(0.5), state_input: str = Form(""), state_invert: int = Form(0),
+                 delete: str = Form("")):
+    require(request, admin=True)
+    if id and delete:
+        db.run("DELETE FROM garage_openers WHERE id=?", id)
+        return RedirectResponse("/admin#garage", status_code=303)
+    si = int(state_input) if state_input.strip().isdigit() else None
+    vals = (name.strip(), house_id or None, camera_id or None, host.strip(), auth.strip(),
+            relay, max(0.1, min(5.0, pulse)), si, state_invert)
+    if id:
+        db.run("UPDATE garage_openers SET name=?, house_id=?, camera_id=?, host=?, auth=?, relay=?, pulse=?, state_input=?, state_invert=? WHERE id=?",
+               *vals, id)
+    else:
+        db.run("INSERT INTO garage_openers(name,house_id,camera_id,host,auth,relay,pulse,state_input,state_invert,backend,created) VALUES(?,?,?,?,?,?,?,?,?, 'shelly', ?)",
+               *vals, time.time())
+    return RedirectResponse("/admin#garage", status_code=303)
+
+
+@app.post("/admin/garage/{opener_id}/test")
+async def admin_garage_test(request: Request, opener_id: int):
+    """Admin 'Test connection' — checks the relay answers, without pressing."""
+    require(request, admin=True)
+    op = db.one("SELECT * FROM garage_openers WHERE id=?", opener_id)
+    if not op:
+        raise HTTPException(404)
+    ok, err = await asyncio.get_event_loop().run_in_executor(None, garage.reachable, op)
+    return {"ok": ok, "error": err}
 
 
 # ------------------------------------------------------------------ privacy mode
@@ -1560,6 +1624,8 @@ def admin(request: Request, msg: str = ""):
     for r in db.q("SELECT k, v FROM kv WHERE k LIKE 'watch:%'"):
         j = json.loads(r["v"]); j["url"] = r["k"][6:]; watch.append(j)
     backup = json.loads(db.kv_get("backup:last") or "null")
+    openers = db.q("SELECT o.*, h.name AS house_name, c.name AS cam_name FROM garage_openers o "
+                   "LEFT JOIN houses h ON h.id=o.house_id LEFT JOIN cameras c ON c.id=o.camera_id ORDER BY h.sort, h.name, o.name")
     try:
         g = json.load(open(os.path.join(HEATING_OUT, "lcd_geom.json")))
         lcd = {"since": g.get("since"), "how": g.get("how"),
@@ -1568,7 +1634,7 @@ def admin(request: Request, msg: str = ""):
         lcd = None
     return render(request, "admin.html", houses=houses, cams=cams, people=people, groups=groups, members=members,
                   roster=roster, alert_kinds=ALERT_LABELS, alert_help=ALERT_HELP, gcams=gcams, member_ids=member_ids, gcam_ids=gcam_ids, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
-                  heating=_heating_state, heating_every=HEATING_EVERY // 60, watch=watch, backup=backup, lcd=lcd)
+                  heating=_heating_state, heating_every=HEATING_EVERY // 60, watch=watch, backup=backup, lcd=lcd, openers=openers)
 
 
 @app.post("/admin/house")

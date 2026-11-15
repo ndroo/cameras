@@ -257,6 +257,32 @@ $("#player .controls").addEventListener("click", ev => {
 window.addEventListener("resize", layout); document.addEventListener("fullscreenchange", layout); document.addEventListener("webkitfullscreenchange", layout);
 
 // ---------------------------------------------------------------- pan / tilt (cameras with a motor, live view only)
+// ---------------------------------------------------------------- garage door (admin-only, one momentary press = toggle)
+const garageBtn = $("#garageBtn");
+if (garageBtn && D.opener) {
+  garageBtn.hidden = false;
+  const txt = $("#garageTxt");
+  const base = D.opener.name || "Garage";
+  txt.textContent = base;
+  let busy = false;
+  garageBtn.addEventListener("click", async () => {
+    if (busy) return;
+    if (!confirm(`Open / close "${base}"? The door will move.`)) return;
+    busy = true; garageBtn.classList.add("busy"); txt.textContent = "Working…";
+    try {
+      const r = await fetch(`/garage/${D.opener.id}/press`, { method: "POST", credentials: "same-origin" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || `error ${r.status}`);
+      garageBtn.classList.remove("busy"); garageBtn.classList.add("ok"); txt.textContent = "Sent ✓";
+      setTimeout(() => { garageBtn.classList.remove("ok"); txt.textContent = base; busy = false; }, 2500);
+    } catch (e) {
+      garageBtn.classList.remove("busy"); garageBtn.classList.add("bad"); txt.textContent = "Failed";
+      garageBtn.title = String(e.message || e);
+      setTimeout(() => { garageBtn.classList.remove("bad"); txt.textContent = base; busy = false; }, 4000);
+    }
+  });
+}
+
 const ptz = $("#ptz"), PTZ_STEP = 10;
 function camVector(dir) {
   // screen direction -> camera pan/tilt, undoing the display rotation and flips so "up" moves the picture up

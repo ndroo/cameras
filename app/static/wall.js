@@ -66,7 +66,7 @@ function drawWall() {
     const el = document.createElement("div"); el.className = "wallTile"; el.title = "Click for sound";
     el.dataset.id = c.id;
     el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner"><i class="spin"></i>Connecting…</div>
-      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}${c.sd ? ` · ${c.sd.short}` : ""}</span><i class="snd" hidden>🔊</i><a class="open" href="/cam/${c.id}" title="Open this camera">↗</a><i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
+      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}${c.sd ? ` · ${c.sd.short}` : ""}</span><i class="snd" hidden>🔊</i><a class="open" href="/cam/${c.id}" title="Open this camera">↗</a>${c.opener ? `<button type="button" class="garageTile" title="Open / close ${c.opener.name}">🚪</button>` : ""}<i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
     const sideways = c.rotate === 90 || c.rotate === 270; if (sideways) el.classList.add("sideways");
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
     stage.prepend(vs); wall.appendChild(el);
@@ -90,12 +90,30 @@ function drawWall() {
     const drawSnd = () => { const vv = vs.video, on = !!vv && !vv.muted; snd.hidden = !on; el.classList.toggle("sound", on); el.title = on ? "Click to mute" : "Click for sound"; };
     if (v) v.addEventListener("volumechange", drawSnd);
     el.addEventListener("click", ev => {
-      if (el.dataset.dragged || ev.target.closest(".open,.grip")) return;
+      if (el.dataset.dragged || ev.target.closest(".open,.grip,.garageTile")) return;
       const vv = vs.video; if (!vv) return;
       let lvl = 0.8; try { const x = parseFloat(localStorage.getItem("vol")); if (x > 0 && x <= 1) lvl = x; } catch {}   // the camera page's volume
       vv.volume = lvl; vv.muted = !vv.muted; if (!vv.muted) vv.play().catch(() => {});
       drawSnd();
     });
+    // garage door (admin-only; present only when the camera has an opener assigned)
+    const gbtn = el.querySelector(".garageTile");
+    if (gbtn && c.opener) {
+      let gbusy = false;
+      gbtn.addEventListener("click", async ev => {
+        ev.stopPropagation();
+        if (gbusy) return;
+        if (!confirm(`Open / close "${c.opener.name}"? The door will move.`)) return;
+        gbusy = true; gbtn.classList.add("busy"); gbtn.textContent = "…";
+        try {
+          const r = await fetch(`/garage/${c.opener.id}/press`, { method: "POST", credentials: "same-origin" });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || !j.ok) throw new Error(j.error || `error ${r.status}`);
+          gbtn.classList.remove("busy"); gbtn.classList.add("ok"); gbtn.textContent = "✓";
+        } catch (e) { gbtn.classList.remove("busy"); gbtn.classList.add("bad"); gbtn.textContent = "✕"; gbtn.title = String(e.message || e); }
+        setTimeout(() => { gbtn.classList.remove("ok", "bad"); gbtn.textContent = "🚪"; gbusy = false; }, 2500);
+      });
+    }
     tiles.set(c.id, { el, vs, lay }); lay(); enableDrag(el);
     new ResizeObserver(lay).observe(stage);
   }

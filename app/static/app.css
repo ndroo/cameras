@@ -432,3 +432,18 @@ button.failed{background:var(--bad)!important;color:#fff!important}
 .player:fullscreen .stage{flex:1 1 auto;min-height:0;height:auto!important}
 .player:-webkit-full-screen{display:flex;flex-direction:column;width:100%;height:100%;border:0;border-radius:0}
 .player:-webkit-full-screen .stage{flex:1 1 auto;min-height:0;height:auto!important}
+
+/* garage door control (camera page) */
+.controls .pill.garage{background:var(--line);color:var(--fg);gap:6px}
+.controls .pill.garage .gic{font-size:15px;line-height:1}
+.controls .pill.garage:hover{background:var(--acc);color:#fff}
+.controls .pill.garage.busy{background:var(--acc);color:#fff;opacity:.8}
+.controls .pill.garage.ok{background:var(--ok);color:#fff}
+.controls .pill.garage.bad{background:var(--bad);color:#fff}
+.ok-txt{color:var(--ok)}
+
+/* garage button on a multi-view tile */
+.wallTile .tag .garageTile{margin:0;padding:0 5px;width:auto;height:20px;font-size:12px;line-height:1;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.25);border-radius:6px;color:#fff;cursor:pointer;backdrop-filter:blur(4px)}
+.wallTile .tag .garageTile:hover{background:var(--acc);border-color:var(--acc)}
+.wallTile .tag .garageTile.ok{background:var(--ok);border-color:var(--ok)}
+.wallTile .tag .garageTile.bad{background:var(--bad);border-color:var(--bad)}

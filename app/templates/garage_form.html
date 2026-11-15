@@ -1,0 +1,30 @@
+{# Editor for one garage opener (o) or a new one (o is None). #}
+<form method="post" action="/admin/garage" class="gform">
+  {% if o %}<input type="hidden" name="id" value="{{ o.id }}">{% endif %}
+  <div class="gfield two">
+    <label>Name<input name="name" value="{{ o.name if o else '' }}" placeholder="e.g. Cottage garage" required></label>
+    <label>Property<select name="house_id" required>{% for h in houses %}<option value="{{ h.id }}" {% if o and h.id == o.house_id %}selected{% endif %}>{{ h.name }}</option>{% endfor %}</select></label>
+  </div>
+  <div class="gfield two">
+    <label>Show on camera<select name="camera_id"><option value="0">— none —</option>{% for c in cams %}<option value="{{ c.id }}" {% if o and c.id == o.camera_id %}selected{% endif %}>{{ c.name }}{% if c.house_name %} · {{ c.house_name }}{% endif %}</option>{% endfor %}</select></label>
+    <label>Relay address (IP or host)<input name="host" value="{{ o.host if o else '' }}" placeholder="192.168.1.50"></label>
+  </div>
+  <div class="gfield two">
+    <label>Relay channel<input name="relay" type="number" min="0" max="3" value="{{ o.relay if o else 0 }}"></label>
+    <label>Pulse length (seconds)<input name="pulse" type="number" step="0.1" min="0.1" max="5" value="{{ o.pulse if o else '0.5' }}"></label>
+  </div>
+  <details class="fine">
+    <summary>Advanced</summary>
+    <div class="gfield two" style="margin-top:8px">
+      <label>Relay password <span class="muted">(if set)</span><input name="auth" type="password" autocomplete="new-password" placeholder="{{ 'set ✓' if o and o.auth else 'none' }}"></label>
+      <label>Door-state input <span class="muted">(reed switch, optional)</span><input name="state_input" value="{{ o.state_input if o and o.state_input is not none else '' }}" placeholder="e.g. 0"></label>
+    </div>
+    <label class="opt"><input type="checkbox" name="state_invert" value="1" {% if o and o.state_invert %}checked{% endif %}><span>Input reads <b>open</b> when closed (invert)</span></label>
+  </details>
+  <div class="gactions">
+    <button class="small">{{ 'Save changes' if o else 'Add opener' }}</button>
+    <button type="button" class="secondary small" data-cancel>Cancel</button>
+    <span class="grow"></span>
+    {% if o %}<button class="danger small" name="delete" value="1" onclick="return confirm('Remove {{ o.name }}?')">Delete</button>{% endif %}
+  </div>
+</form>
