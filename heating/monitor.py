@@ -447,6 +447,9 @@ def log_alert(out, result, kind, message, problems, delivery, sid="", error=""):
     kind: problem | cleared | suppressed | held. delivery: sent | failed | not_configured | suppressed | held."""
     rec = {"timestamp": result.get("timestamp"), "local": result.get("local"),
            "kind": kind, "delivery": delivery, "message": message, "problems": problems}
+    img = (result.get("boiler") or {}).get("image")
+    if img:
+        rec["image"] = img      # the still that was read; kept 90 days for the dashboard's alert history
     if sid: rec["sid"] = sid
     if error: rec["error"] = error
     with open(os.path.join(out, "alerts.jsonl"), "a") as f:

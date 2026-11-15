@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}Events · Cameras{% endblock %}
 {% block body %}
-<h1>Events</h1>
+<div class="pageHead"><h1>Events</h1>{% include "house_filter.html" %}</div>
 {% if not events %}<p class="muted">No events yet. Doorbell presses, tamper alerts, privacy mode and cameras going offline or back online show up here.</p>{% endif %}
 <ul class="events big">
 {% for e in events %}

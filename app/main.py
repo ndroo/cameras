@@ -104,6 +104,34 @@ tpl.env.filters["hm"] = lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%-I:
 tpl.env.filters["ymd"] = lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%Y%m%d")
 
 
+def sd_info(cam):
+    """What the SD card holds, for the camera lists: None until the first check, else
+    {state: card|none|problem, short, long}. short fits a tile, long is the hover/admin text."""
+    try:
+        sd = json.loads(cam["sd"]) if cam["sd"] else None
+    except Exception:
+        sd = None
+    if not sd:
+        return None
+    if sd["state"] == "none":
+        return {"state": "none", "short": "No SD card", "long": "No SD card, so nothing is recorded. Live view still works."}
+    if sd["state"] == "problem":
+        return {"state": "problem", "short": "SD card problem", "long": f"SD card status: {sd.get('status') or 'unknown'}"}
+    size = re.sub(r"(\d)([KMGT]?B)$", r"\1 \2", sd.get("total") or "?")    # "111.3GB" -> "111.3 GB"
+    oldest = sd.get("oldest") or 0
+    if not oldest:
+        return {"state": "card", "short": "SD card, no footage yet", "long": f"{size} SD card, no footage yet"}
+    secs = max(0, time.time() - oldest)
+    span = f"{int(secs // 86400)} day{'s' if secs >= 2 * 86400 else ''}" if secs >= 86400 else f"{max(1, int(secs // 3600))} h"
+    since = datetime.fromtimestamp(oldest, TZ).strftime("%b %-d")
+    return {"state": "card", "short": f"SD {span} back", "span": span, "size": size, "since": since,
+            "long": f"{size} SD card, footage back to {since} ({span})"
+                    + (", oldest footage is overwritten as it fills" if sd.get("loop") else "")}
+
+
+tpl.env.filters["sd"] = sd_info
+
+
 # ------------------------------------------------------------------ auth
 def current_person(request: Request):
     tok = request.cookies.get("s")
@@ -242,6 +270,10 @@ def login_code(request: Request, ident: str = Form(...), code: str = Form(""), p
 
 ALERT_LABELS = {"doorbell": "Doorbell pressed", "tamper": "Camera tampered with",
                 "offline": "Camera offline / back online", "motion": "Motion / person"}
+ALERT_HELP = {"doorbell": "Someone presses a doorbell at this property.",
+              "tamper": "A camera is covered, knocked or moved.",
+              "offline": f"A camera has been offline for {OFFLINE_ALERT_SECS // 60} minutes, and again when it's back.",
+              "motion": "Every motion or person detection. Noisy, best left off."}
 
 
 def _my_alert_groups(me):
@@ -260,7 +292,14 @@ def _my_alert_groups(me):
 def account(request: Request, msg: str = "", err: str = ""):
     me = require(request)
     sessions = db.one("SELECT COUNT(*) n FROM sessions WHERE person_id=?", me["id"])["n"]
-    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions, alert_groups=_my_alert_groups(me))
+    groups = _my_alert_groups(me)
+    # one row per kind of text, one column per group: None where that group doesn't send it
+    rows = []
+    for k in db.ALERT_KINDS:
+        cells = [next((x for x in g["kinds"] if x["kind"] == k), None) for g in groups]
+        if any(cells):
+            rows.append({"kind": k, "label": ALERT_LABELS[k], "help": ALERT_HELP[k], "cells": cells})
+    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions, alert_groups=groups, alert_rows=rows)
 
 
 @app.post("/account/alerts")
@@ -351,17 +390,40 @@ def logout(request: Request):
 
 
 # ------------------------------------------------------------------ pages
+def _house_filter(request, cams):
+    """The house picked in the filter bar (?house=<id>|all, remembered in a cookie), the houses
+    this person can see, and the cameras narrowed to the pick. Returns (pick, houses, cams, set_cookie)."""
+    houses, seen = [], set()
+    for c in cams:
+        if c["house_id"] and c["house_id"] not in seen:
+            seen.add(c["house_id"]); houses.append({"id": c["house_id"], "name": c["house_name"]})
+    q = request.query_params.get("house")
+    raw = q if q is not None else request.cookies.get("house", "all")
+    pick = int(raw) if raw.isdigit() and int(raw) in seen else None
+    if len(houses) < 2:
+        pick = None
+    if pick:
+        cams = [c for c in cams if c["house_id"] == pick]
+    return pick, houses, cams, q is not None
+
+
+def _remember_house(resp, pick):
+    resp.set_cookie("house", str(pick or "all"), max_age=365 * 86400, httponly=True, samesite="lax", secure=SECURE_COOKIE)
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     me = require(request)
-    cams = db.person_cameras(me)
+    pick, house_list, cams, setc = _house_filter(request, db.person_cameras(me))
     houses = []
     for c in cams:
         if not houses or houses[-1]["name"] != (c["house_name"] or "Unassigned"):
             houses.append({"name": c["house_name"] or "Unassigned", "cams": []})
         houses[-1]["cams"].append(c)
     private = {r["camera_id"]: r["until"] for r in db.q("SELECT camera_id, until FROM privacy WHERE ended_at IS NULL AND until>?", time.time())}
-    return render(request, "home.html", houses=houses, me=me, private=private)
+    r = render(request, "home.html", houses=houses, me=me, private=private, house_pick=pick, house_list=house_list)
+    return _remember_house(r, pick) if setc else r
 
 
 @app.get("/cam/{cam_id}", response_class=HTMLResponse)
@@ -384,21 +446,26 @@ async def cam_page(request: Request, cam_id: int, date: str = "", at: str = ""):
 @app.get("/wall", response_class=HTMLResponse)
 def wall(request: Request):
     me = require(request)
+    pick, house_list, rows, setc = _house_filter(request, db.person_cameras(me))
     cams = [{"id": c["id"], "name": c["name"], "house": c["house_name"], "online": c["online"], "rotate": c["rotate"], "flipH": c["flip_h"],
-             "flipV": c["flip_v"], "thumbAt": int(c["thumb_at"] or 0), "private": bool(db.privacy_active(c["id"]))} for c in db.person_cameras(me)]
-    return render(request, "wall.html", me=me, data=json.dumps(cams))
+             "flipV": c["flip_v"], "thumbAt": int(c["thumb_at"] or 0), "private": bool(db.privacy_active(c["id"])),
+             "sd": sd_info(c)} for c in rows]
+    r = render(request, "wall.html", me=me, data=json.dumps(cams), house_pick=pick, house_list=house_list)
+    return _remember_house(r, pick) if setc else r
 
 
 @app.get("/events", response_class=HTMLResponse)
 def events_page(request: Request):
     me = require(request)
-    ids = [c["id"] for c in db.person_cameras(me)]
+    pick, house_list, cams, setc = _house_filter(request, db.person_cameras(me))
+    ids = [c["id"] for c in cams]
     rows = []
     if ids:
         rows = db.q(f"SELECT e.*, c.name AS cam_name, h.name AS house_name FROM events e JOIN cameras c ON c.id=e.camera_id "
                     f"LEFT JOIN houses h ON h.id=c.house_id WHERE e.camera_id IN ({','.join('?' * len(ids))}) "
                     f"ORDER BY e.at DESC LIMIT 200", *ids)
-    return render(request, "events.html", events=rows, me=me)
+    r = render(request, "events.html", events=rows, me=me, house_pick=pick, house_list=house_list)
+    return _remember_house(r, pick) if setc else r
 
 
 @app.post("/cam/{cam_id}/orientation")
@@ -1139,6 +1206,8 @@ def check_camera(cam):
         if was == 0:
             # "back online" is only texted to people who were told it went offline
             record_event(cam, "online", notify=bool(cam["offline_alerted"]))
+        if time.time() - (cam["sd_at"] or 0) > SD_EVERY:
+            refresh_sd(cam)
         if cam["ptz"] is None:          # first successful check: find out whether it has a motor
             try:
                 db.run("UPDATE cameras SET ptz=? WHERE id=?", 1 if tapo.ptz_supported(cloud, cam["device_id"]) else 0, cam["id"])
@@ -1156,6 +1225,33 @@ def check_camera(cam):
         if fails >= OFFLINE_AFTER and not cam["offline_alerted"] and now - down_since >= OFFLINE_ALERT_SECS:
             db.run("UPDATE cameras SET offline_alerted=1 WHERE id=?", cam["id"])
             notify_event(cam, "offline")
+
+
+SD_EVERY = int(os.environ.get("SD_EVERY", "3600"))    # how often each camera's SD card is looked at
+
+
+def refresh_sd(cam):
+    """Ask the camera about its card (one control call) and keep a summary for the camera lists.
+    record_start_time is the oldest footage still on the card."""
+    try:
+        try:
+            info = tapo.sd_status(cloud, cam["device_id"])
+        except Exception as e:
+            if "71114" not in str(e):
+                raise
+            info = None
+        status = (info or {}).get("status", "")
+        if not info or status in ("offline", "") or info.get("detect_status") == "offline":
+            sd = {"state": "none"}
+        elif status in ("normal", "full", "insufficient"):
+            total = info.get("video_total_space") if info.get("total_space") == "0B" else info.get("total_space")
+            sd = {"state": "card", "status": status, "total": total, "free": info.get("free_space"),
+                  "oldest": int(info.get("record_start_time") or 0), "loop": info.get("loop_record_status") == "1"}
+        else:
+            sd = {"state": "problem", "status": status}
+        db.run("UPDATE cameras SET sd=?, sd_at=? WHERE id=?", json.dumps(sd), time.time(), cam["id"])
+    except Exception as e:
+        log.info("sd check %s: %s", cam["name"], e)
 
 
 def _interleave_by_house(cams):
@@ -1229,15 +1325,52 @@ def heating_cycle():
     return ok
 
 
-def _prune_stills(keep_days=2, keep_disputed_days=30):
+def _alert_stills():
+    """Still filenames the alert history points to: newer alerts name them, older ones are
+    matched to the reading taken at the same moment."""
+    keep, want = set(), set()
+    try:
+        for line in open(os.path.join(HEATING_OUT, "alerts.jsonl")):
+            try:
+                a = json.loads(line)
+            except Exception:
+                continue
+            if a.get("image"):
+                keep.add(a["image"])
+            elif a.get("timestamp"):
+                want.add(a["timestamp"])
+        if want:
+            for line in open(os.path.join(HEATING_OUT, "readings.jsonl")):
+                m = re.search(r'"timestamp": "([^"]+)"', line[:200])
+                if m and m.group(1) in want:
+                    img = (json.loads(line).get("boiler") or {}).get("image")
+                    if img:
+                        keep.add(img)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.info("alert stills: %s", e)
+    return keep
+
+
+def _prune_stills(keep_days=2, keep_disputed_days=30, keep_alert_days=90):
     """Timestamped stills pile up fast; keep two days of them (the *_latest.jpg files stay).
-    Frames where the arbiter overruled the pixels (disputed_*) are kept a month for review."""
+    Frames where the arbiter overruled the pixels (disputed_*) are kept a month for review, and the
+    boiler still behind each alert is kept 90 days so the dashboard can show what the screen said."""
     now = time.time()
+    alert_stills = _alert_stills()
+    try:
+        # which alert stills exist, so the dashboard only links pictures it can show
+        have = sorted(f for f in alert_stills if os.path.exists(os.path.join(HEATING_OUT, f)))
+        with open(os.path.join(HEATING_OUT, "alert_stills.json"), "w") as fh:
+            json.dump(have, fh)
+    except Exception as e:
+        log.info("alert stills list: %s", e)
     try:
         for f in os.listdir(HEATING_OUT):
             if f.endswith(".jpg") and "_latest" not in f:
                 p = os.path.join(HEATING_OUT, f)
-                days = keep_disputed_days if f.startswith("disputed_") else keep_days
+                days = keep_alert_days if f in alert_stills else keep_disputed_days if f.startswith("disputed_") else keep_days
                 if os.path.getmtime(p) < now - days * 86400:
                     os.remove(p)
     except Exception:
@@ -1272,6 +1405,8 @@ def heating_root():
 @app.get("/heating/{page}")
 def heating_page(page: str = ""):
     """Legend and history pages, plus the data the site's dashboard reads. Public on purpose."""
+    if page == "dashboard.js":       # the one copy of the dashboard script; the 180 Beatrice page loads it too
+        return FileResponse(os.path.join(HEATING_DIR, "dashboard.js"), media_type="text/javascript", headers={"Cache-Control": "no-cache"})
     name = HEATING_PAGES.get(page)
     if not name:
         raise HTTPException(404)
@@ -1298,21 +1433,10 @@ def heating_doc(name: str):
     return FileResponse(p)
 
 
-@app.post("/admin/heating/run")
-def admin_heating_run(request: Request):
-    require(request, admin=True)
-    threading.Thread(target=heating_cycle, daemon=True).start()
-    return RedirectResponse("/admin?msg=Heating+cycle+started", status_code=303)
-
-
-@app.post("/admin/heating/recalibrate")
-def admin_heating_recalibrate(request: Request):
-    """Find the boiler LCD again (after the camera was moved) on a cycle that starts now."""
-    require(request, admin=True)
-    os.makedirs(HEATING_OUT, exist_ok=True)
-    open(os.path.join(HEATING_OUT, "lcd_recalibrate"), "w").close()
-    threading.Thread(target=heating_cycle, daemon=True).start()
-    return RedirectResponse("/admin?msg=Boiler+LCD+recalibration+started+(result+in+about+a+minute)", status_code=303)
+# Boiler LCD recalibration has no button or route: it re-finds the LCD by itself when the camera
+# moves. To force it, touch $DATA_DIR/heating/stills/lcd_recalibrate on the volume, e.g.
+#   fly ssh console -C "touch /data/heating/stills/lcd_recalibrate"
+# and the next heating cycle (within HEATING_EVERY) recalibrates.
 
 
 # ------------------------------------------------------------------ watchdog for the other sites
@@ -1425,9 +1549,12 @@ def admin(request: Request, msg: str = ""):
     for r in db.q("SELECT gm.group_id, gm.muted, p.id, p.name FROM group_members gm JOIN people p ON p.id=gm.person_id ORDER BY p.name"):
         members.setdefault(r["group_id"], []).append(r["name"])
         roster.setdefault(r["group_id"], []).append({"id": r["id"], "name": r["name"], "muted": db.muted_set(r["muted"])})
-    gcams = {}
-    for r in db.q("SELECT gc.group_id, c.name FROM group_cameras gc JOIN cameras c ON c.id=gc.camera_id ORDER BY c.name"):
+    gcams, member_ids, gcam_ids = {}, {}, {}
+    for r in db.q("SELECT gc.group_id, c.id, c.name FROM group_cameras gc JOIN cameras c ON c.id=gc.camera_id ORDER BY c.sort, c.name"):
         gcams.setdefault(r["group_id"], []).append(r["name"])
+        gcam_ids.setdefault(r["group_id"], set()).add(r["id"])
+    for gid, rows in roster.items():
+        member_ids[gid] = {m["id"] for m in rows}
     recent_sms = db.q("SELECT * FROM sms_log ORDER BY at DESC LIMIT 15")
     watch = []
     for r in db.q("SELECT k, v FROM kv WHERE k LIKE 'watch:%'"):
@@ -1440,8 +1567,8 @@ def admin(request: Request, msg: str = ""):
     except Exception:
         lcd = None
     return render(request, "admin.html", houses=houses, cams=cams, people=people, groups=groups, members=members,
-                  roster=roster, alert_kinds=ALERT_LABELS, gcams=gcams, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
-                  heating=_heating_state, watch=watch, backup=backup, lcd=lcd)
+                  roster=roster, alert_kinds=ALERT_LABELS, alert_help=ALERT_HELP, gcams=gcams, member_ids=member_ids, gcam_ids=gcam_ids, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
+                  heating=_heating_state, heating_every=HEATING_EVERY // 60, watch=watch, backup=backup, lcd=lcd)
 
 
 @app.post("/admin/house")
@@ -1547,8 +1674,10 @@ async def admin_group(request: Request):
     gid = int(f.get("id") or 0)
     if gid and f.get("delete"):
         db.run("DELETE FROM groups WHERE id=?", gid)
-        return RedirectResponse("/admin", status_code=303)
-    vals = (f.get("name", "").strip(), int(f.get("house_id") or 0), 1 if f.get("all_cameras") else 0,
+        return RedirectResponse("/admin#groups", status_code=303)
+    house_id = int(f.get("house_id") or 0)
+    all_cams = 1 if f.get("all_cameras") == "1" else 0
+    vals = (f.get("name", "").strip(), house_id, all_cams,
             1 if f.get("notify_doorbell") else 0, 1 if f.get("notify_tamper") else 0,
             1 if f.get("notify_offline") else 0, 1 if f.get("notify_motion") else 0)
     if gid:
@@ -1568,9 +1697,12 @@ async def admin_group(request: Request):
             muted = before.get(pid, "")
         db.run("INSERT OR IGNORE INTO group_members(group_id,person_id,muted) VALUES(?,?,?)", gid, pid, muted)
     db.run("DELETE FROM group_cameras WHERE group_id=?", gid)
-    for cid in f.getlist("cameras"):
-        db.run("INSERT OR IGNORE INTO group_cameras(group_id,camera_id) VALUES(?,?)", gid, int(cid))
-    return RedirectResponse("/admin", status_code=303)
+    if not all_cams:
+        own = {r["id"] for r in db.q("SELECT id FROM cameras WHERE house_id=?", house_id)}
+        for cid in f.getlist("cameras"):
+            if int(cid) in own:
+                db.run("INSERT OR IGNORE INTO group_cameras(group_id,camera_id) VALUES(?,?)", gid, int(cid))
+    return RedirectResponse("/admin#groups", status_code=303)
 
 
 @app.post("/admin/test-sms")

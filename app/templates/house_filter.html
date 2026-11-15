@@ -1,0 +1,6 @@
+{% if house_list and house_list|length > 1 %}
+<nav class="houseFilter" aria-label="Filter by property">
+  <a href="?house=all" class="{{ 'on' if not house_pick }}">All</a>
+  {% for h in house_list %}<a href="?house={{ h.id }}" class="{{ 'on' if house_pick == h.id }}">{{ h.name }}</a>{% endfor %}
+</nav>
+{% endif %}

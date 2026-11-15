@@ -1,25 +1,52 @@
+{# Editor for one group (g) or a new one (g is None). Shown in place of the group's card. #}
+{% set mids = member_ids.get(g.id, []) if g else [] %}
+{% set cids = gcam_ids.get(g.id, []) if g else [] %}
 <form method="post" action="/admin/group" class="gform">
   {% if g %}<input type="hidden" name="id" value="{{ g.id }}">{% endif %}
-  <div class="line"><label>Name</label><input name="name" value="{{ g.name if g else '' }}" placeholder="e.g. Tenants, Owners" required>
-    <label>House</label><select name="house_id" required>{% for h in houses %}<option value="{{ h.id }}" {% if g and h.id == g.house_id %}selected{% endif %}>{{ h.name }}</option>{% endfor %}</select></div>
-  <div class="cols">
-    <div><b>Members</b>{% for p in people %}<label class="chk block"><input type="checkbox" name="members" value="{{ p.id }}" {% if g and p.name in members.get(g.id, []) %}checked{% endif %}>{{ p.name }}</label>{% endfor %}</div>
-    <div><b>Cameras</b>
-      <label class="chk block"><input type="checkbox" name="all_cameras" value="1" {% if not g or g.all_cameras %}checked{% endif %}>All cameras in the house</label>
-      <div class="muted tiny">or only these:</div>
-      {% for c in cams %}<label class="chk block"><input type="checkbox" name="cameras" value="{{ c.id }}" {% if g and c.name in gcams.get(g.id, []) %}checked{% endif %}>{{ c.name }} <span class="muted tiny">{{ c.house_name or '' }}</span></label>{% endfor %}</div>
-    <div><b>Text alerts</b>
-      <label class="chk block"><input type="checkbox" name="notify_doorbell" value="1" {% if g and g.notify_doorbell %}checked{% endif %}>Doorbell pressed</label>
-      <label class="chk block"><input type="checkbox" name="notify_tamper" value="1" {% if g and g.notify_tamper %}checked{% endif %}>Camera tampered with</label>
-      <label class="chk block"><input type="checkbox" name="notify_offline" value="1" {% if g and g.notify_offline %}checked{% endif %}>Camera offline / back online</label>
-      <label class="chk block"><input type="checkbox" name="notify_motion" value="1" {% if g and g.notify_motion %}checked{% endif %}>Motion / person (noisy)</label>
-      {% if g and roster.get(g.id) %}
-      <div class="muted tiny" style="margin-top:8px">Who gets them (people can also change this under Account):</div>
-      <table class="rcv tiny"><tr><th></th>{% for k in alert_kinds %}<th title="{{ alert_kinds[k] }}">{{ k }}</th>{% endfor %}</tr>
+
+  <div class="gfield two">
+    <label>Group name<input name="name" value="{{ g.name if g else '' }}" placeholder="e.g. Tenants, Owners" required></label>
+    <label>Property<select name="house_id" data-house required>{% for h in houses %}<option value="{{ h.id }}" {% if (g and h.id == g.house_id) or (not g and h.id == new_house) %}selected{% endif %}>{{ h.name }}</option>{% endfor %}</select></label>
+  </div>
+
+  <fieldset class="gfield">
+    <legend>People in this group</legend>
+    <div class="pchips">
+      {% for p in people %}<label class="pchip"><input type="checkbox" name="members" value="{{ p.id }}" {% if p.id in mids %}checked{% endif %}><span>{{ p.name }}</span></label>{% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset class="gfield">
+    <legend>Cameras they can watch</legend>
+    <label class="opt"><input type="radio" name="all_cameras" value="1" {% if not g or g.all_cameras %}checked{% endif %}><span><b>Every camera at this property</b><span class="muted small">Including cameras added later.</span></span></label>
+    <label class="opt"><input type="radio" name="all_cameras" value="0" {% if g and not g.all_cameras %}checked{% endif %}><span><b>Only some cameras</b></span></label>
+    <div class="pchips camPick">
+      {% for c in cams %}<label class="pchip" data-house="{{ c.house_id or 0 }}"><input type="checkbox" name="cameras" value="{{ c.id }}" {% if c.id in cids %}checked{% endif %}><span>{{ c.name }}</span></label>{% endfor %}
+      <span class="muted small camNone" hidden>This property has no cameras yet.</span>
+    </div>
+  </fieldset>
+
+  <fieldset class="gfield">
+    <legend>Texts they get</legend>
+    {% for k in alert_kinds %}
+    <label class="opt"><input type="checkbox" name="notify_{{ k }}" value="1" {% if g and g['notify_' ~ k] %}checked{% endif %}><span><b>{{ alert_kinds[k] }}</b><span class="muted small">{{ alert_help[k] }}</span></span></label>
+    {% endfor %}
+    {% if g and roster.get(g.id) %}
+    <details class="fine">
+      <summary>Fine-tune per person</summary>
+      <p class="muted small">Untick to stop one person getting a kind of text. People can change this themselves under Account too.</p>
+      <table class="rcv small"><tr><th></th>{% for k in alert_kinds %}<th>{{ alert_kinds[k] }}</th>{% endfor %}</tr>
         {% for m in roster[g.id] %}<tr><td>{{ m.name }}<input type="hidden" name="rcv_{{ m.id }}" value="1"></td>
           {% for k in alert_kinds %}<td><input type="checkbox" name="get_{{ m.id }}" value="{{ k }}" {% if k not in m.muted %}checked{% endif %}></td>{% endfor %}</tr>{% endfor %}
       </table>
-      {% endif %}</div>
+    </details>
+    {% endif %}
+  </fieldset>
+
+  <div class="gactions">
+    <button class="small">{{ 'Save changes' if g else 'Create group' }}</button>
+    <button type="button" class="secondary small" data-cancel>Cancel</button>
+    <span class="grow"></span>
+    {% if g %}<button class="danger small" name="delete" value="1" onclick="return confirm('Delete the {{ g.name }} group at {{ g.house_name }}? Its people lose access to these cameras.')">Delete group</button>{% endif %}
   </div>
-  <div class="line"><button class="small">Save group</button> {% if g %}<button class="danger small" name="delete" value="1" onclick="return confirm('Delete this group?')">Delete</button>{% endif %}</div>
 </form>

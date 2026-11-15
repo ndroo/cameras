@@ -1,30 +1,57 @@
 {% extends "base.html" %}{% block title %}Account · Cameras{% endblock %}
 {% block body %}
-<div class="card narrow">
-  <h1>{{ me.name }}</h1>
-  <p class="muted">{{ me.phone }}{% if me.email %} · {{ me.email }}{% endif %}{% if me.is_admin %} · admin{% endif %}</p>
-  {% if msg %}<p class="notice">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
-  <h3>Passcode</h3>
-  <p class="muted small">{% if me.passcode_hash %}You have a passcode. You can sign in with it instead of waiting for a code.{% else %}Optional. Lets you sign in without waiting for a texted or emailed code.{% endif %}</p>
-  <form method="post" action="/account/passcode">
-    <label>New passcode (6+ characters)</label><input name="passcode" type="password" autocomplete="new-password" minlength="6">
-    <label>Again</label><input name="passcode2" type="password" autocomplete="new-password" minlength="6">
-    <button type="submit" data-busy="Saving…">Save passcode</button>
-    {% if me.passcode_hash %}<button type="submit" name="clear" value="1" class="secondary">Remove passcode</button>{% endif %}
-  </form>
-  {% if alert_groups %}
-  <h3 style="margin-top:22px">Text alerts</h3>
-  <p class="muted small">Texts you get from your groups. Untick any you don't want.</p>
-  <form method="post" action="/account/alerts">
-    {% for g in alert_groups %}
-    <div class="muted small" style="margin-top:8px">{{ g.house }} · {{ g.name }}</div>
-    {% for k in g.kinds %}<label class="chk block"><input type="checkbox" name="get_{{ g.id }}" value="{{ k.kind }}" {% if k.on %}checked{% endif %}>{{ k.label }}</label>{% endfor %}
-    {% endfor %}
-    <button type="submit" data-busy="Saving…">Save text alerts</button>
-  </form>
-  {% endif %}
-  <h3 style="margin-top:22px">Devices</h3>
-  <p class="muted small">Signed in on {{ sessions }} device{{ 's' if sessions != 1 else '' }}. Sign-ins last a year.</p>
-  <form method="post" action="/account/signout-everywhere"><button class="secondary">Sign out everywhere</button></form>
+<div class="acctHead">
+  <div class="avatar">{{ me.name[:1] }}</div>
+  <div><h1>{{ me.name }}</h1>
+    <p class="muted small">{{ me.phone }}{% if me.email %} · {{ me.email }}{% endif %}{% if me.is_admin %} · <span class="tagc">admin</span>{% endif %}</p></div>
+  <span class="grow"></span>
+  <a class="btn" href="/logout">Sign out</a>
+</div>
+{% if msg %}<p class="notice">{{ msg }}</p>{% endif %}{% if err %}<p class="notice errBox">{{ err }}</p>{% endif %}
+
+<div class="acctGrid">
+  <section class="card acctAlerts">
+    <h2>Text alerts</h2>
+    {% if alert_groups %}
+    <p class="muted small">What your groups text you about. Untick anything you'd rather not get.</p>
+    <form method="post" action="/account/alerts">
+      <table class="agrid">
+        <thead><tr><th></th>{% for g in alert_groups %}<th><b>{{ g.house }}</b>{% if alert_groups|selectattr('house', 'equalto', g.house)|list|length > 1 %}<span class="muted">{{ g.name }}</span>{% endif %}</th>{% endfor %}</tr></thead>
+        <tbody>
+        {% for r in alert_rows %}
+        <tr><td><b>{{ r.label }}</b><span class="muted small">{{ r.help }}</span></td>
+          {% for c in r.cells %}<td>{% if c %}<input type="checkbox" name="get_{{ alert_groups[loop.index0].id }}" value="{{ r.kind }}" {% if c.on %}checked{% endif %} aria-label="{{ r.label }}, {{ alert_groups[loop.index0].house }}">{% else %}<span class="muted" title="This group doesn't send these">–</span>{% endif %}</td>{% endfor %}</tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <button type="submit" class="small" data-busy="Saving…">Save text alerts</button>
+    </form>
+    {% else %}
+    <p class="muted small">None of your groups send texts, so there's nothing to set here.</p>
+    {% endif %}
+  </section>
+
+  <div class="acctSide">
+    <section class="card">
+      <h2>Passcode</h2>
+      <p class="muted small">{% if me.passcode_hash %}You have one. Use it to sign in instead of waiting for a code.{% else %}Optional. Lets you sign in without waiting for a texted or emailed code.{% endif %}</p>
+      <form method="post" action="/account/passcode">
+        <div class="two">
+          <label>New passcode<input name="passcode" type="password" autocomplete="new-password" minlength="6" placeholder="6+ characters"></label>
+          <label>Again<input name="passcode2" type="password" autocomplete="new-password" minlength="6"></label>
+        </div>
+        <div class="btnRow">
+          <button type="submit" class="small" data-busy="Saving…">Save passcode</button>
+          {% if me.passcode_hash %}<button type="submit" name="clear" value="1" class="secondary small">Remove passcode</button>{% endif %}
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Devices</h2>
+      <p class="muted small">Signed in on {{ sessions }} device{{ 's' if sessions != 1 else '' }}. Sign-ins last a year.</p>
+      <form method="post" action="/account/signout-everywhere"><button class="secondary small">Sign out everywhere</button></form>
+    </section>
+  </div>
 </div>
 {% endblock %}

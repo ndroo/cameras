@@ -3,8 +3,11 @@ const CAMS = JSON.parse(document.getElementById("data").textContent);
 const $ = s => document.querySelector(s);
 const wall = $("#wall"), colsSel = $("#cols");
 let sel = new Set(CAMS.slice(0, 6).map(c => c.id)), cols = 0, order = CAMS.map(c => c.id);
-try { const s = JSON.parse(localStorage.getItem("wall:sel")); if (Array.isArray(s)) sel = new Set(s.filter(id => CAMS.some(c => c.id === id))); cols = +localStorage.getItem("wall:cols") || 0;
-  const o = JSON.parse(localStorage.getItem("wall:order")); if (Array.isArray(o)) order = [...o.filter(id => CAMS.some(c => c.id === id)), ...order.filter(id => !o.includes(id))]; } catch {}
+// the page may list only one property's cameras (house filter), so picks and order for
+// cameras not listed here are kept as they are rather than dropped
+try { const s = JSON.parse(localStorage.getItem("wall:sel")); if (Array.isArray(s)) sel = new Set(s.filter(id => Number.isInteger(id))); cols = +localStorage.getItem("wall:cols") || 0;
+  const o = JSON.parse(localStorage.getItem("wall:order")); if (Array.isArray(o)) order = [...o.filter(id => Number.isInteger(id)), ...order.filter(id => !o.includes(id))]; } catch {}
+const shownSel = () => CAMS.filter(c => sel.has(c.id)).length;
 const byOrder = (a, b) => order.indexOf(a.id) - order.indexOf(b.id);
 colsSel.value = String(cols);
 
@@ -23,13 +26,14 @@ function drawPick() {
     list.appendChild(hd);
     for (const c of cams) {
       const row = document.createElement("label"); row.className = "pickRow";
-      row.innerHTML = `<input type="checkbox" ${sel.has(c.id) ? "checked" : ""}><span class="sw"></span><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><span class="nm">${c.name}</span>`;
+      row.innerHTML = `<input type="checkbox" ${sel.has(c.id) ? "checked" : ""}><span class="sw"></span><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><span class="nm">${c.name}</span>${c.sd ? `<span class="sdTag ${c.sd.state}" title="${c.sd.long}">${c.sd.short}</span>` : ""}`;
       row.querySelector("input").addEventListener("change", ev => { ev.target.checked ? sel.add(c.id) : sel.delete(c.id); apply(); });
       list.appendChild(row);
     }
   }
-  $("#pickCount").textContent = `${sel.size} of ${CAMS.length}`;
-  $("#pickTxt").textContent = sel.size ? `${sel.size} camera${sel.size > 1 ? "s" : ""}` : "Choose cameras";
+  const n = shownSel();
+  $("#pickCount").textContent = `${n} of ${CAMS.length}`;
+  $("#pickTxt").textContent = n ? `${n} camera${n > 1 ? "s" : ""}` : "Choose cameras";
 }
 function apply() { save(); drawPick(); drawWall(); }
 search.addEventListener("input", drawPick);
@@ -37,7 +41,7 @@ $("#pickBtn").addEventListener("click", () => openDrawer(true));
 $("#drawerClose").addEventListener("click", () => openDrawer(false));
 $("#drawerDone").addEventListener("click", () => openDrawer(false));
 back.addEventListener("click", () => openDrawer(false));
-$("#pickNone").addEventListener("click", () => { sel.clear(); apply(); });
+$("#pickNone").addEventListener("click", () => { for (const c of CAMS) sel.delete(c.id); apply(); });
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") openDrawer(false); });
 search.value = "";
 function save() { try { localStorage.setItem("wall:sel", JSON.stringify([...sel])); localStorage.setItem("wall:cols", String(cols)); localStorage.setItem("wall:order", JSON.stringify(order)); } catch {} }
@@ -62,7 +66,7 @@ function drawWall() {
     const el = document.createElement("div"); el.className = "wallTile"; el.title = "Click for sound";
     el.dataset.id = c.id;
     el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner"><i class="spin"></i>Connecting…</div>
-      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}</span><i class="snd" hidden>🔊</i><a class="open" href="/cam/${c.id}" title="Open this camera">↗</a><i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
+      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}${c.sd ? ` · ${c.sd.short}` : ""}</span><i class="snd" hidden>🔊</i><a class="open" href="/cam/${c.id}" title="Open this camera">↗</a><i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
     const sideways = c.rotate === 90 || c.rotate === 270; if (sideways) el.classList.add("sideways");
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
     stage.prepend(vs); wall.appendChild(el);

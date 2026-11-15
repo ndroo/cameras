@@ -2,6 +2,7 @@
 {% block body %}
 <div class="wallHead">
   <h1>Multi-view</h1>
+  {% include "house_filter.html" %}
   <button type="button" class="tool" id="pickBtn">▦ <span id="pickTxt">Choose cameras</span></button>
   <span class="grow"></span>
   <label class="small muted sel">Columns <select id="cols"><option value="0">auto</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>
