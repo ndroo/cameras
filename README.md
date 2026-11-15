@@ -111,3 +111,11 @@ so the browser starts within a few seconds. One playback per camera at a time.
 
 - Audio: identify the private-stream audio codec in the TS and remux it.
 - Two-way talk, PTZ: not planned.
+
+## Boiler LCD recalibration
+
+There is no button for this (it used to be in Admin). The heating monitor finds the LCD again by itself when the camera is moved. To force it:
+
+    fly ssh console -C "touch /data/heating/stills/lcd_recalibrate"
+
+The next heating cycle (within 15 minutes) recalibrates and removes the file.

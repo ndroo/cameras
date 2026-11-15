@@ -48,6 +48,8 @@ MIGRATIONS = [
     "ALTER TABLE group_members ADD COLUMN muted TEXT DEFAULT ''",   # comma list of ALERT_KINDS this member opted out of
     "ALTER TABLE cameras ADD COLUMN down_since REAL",   # first failed check of the current outage
     "ALTER TABLE cameras ADD COLUMN offline_alerted INTEGER DEFAULT 0",   # 1 once the offline text went out
+    "ALTER TABLE cameras ADD COLUMN sd TEXT",       # JSON card summary {state, total, free, oldest, loop}; NULL until checked
+    "ALTER TABLE cameras ADD COLUMN sd_at REAL",    # when the card was last checked
 ]
 
 ALERT_KINDS = ("doorbell", "tamper", "offline", "motion")

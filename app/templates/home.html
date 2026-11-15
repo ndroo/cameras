@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
+{% include "house_filter.html" %}
 {% if not houses %}
   <div class="card narrow"><h1>No cameras yet</h1><p class="muted">{% if me.is_admin %}Head to <a href="/admin">Admin</a> to import cameras from the Tapo account and set up houses.{% else %}You haven't been given access to any cameras yet.{% endif %}</p></div>
 {% endif %}
@@ -17,6 +18,7 @@
         <span class="status"><span class="dot {{ 'ok' if c.online == 1 else ('bad' if c.online == 0 else 'unk') }}"></span>
           {% if c.online == 1 %}Online{% elif c.online == 0 %}Offline since {{ c.online_since|ago }}{% else %}Checking…{% endif %}
           {% if c.id in private %}<span> · 🔒 privacy until {{ private[c.id]|hm }}</span>{% elif c.thumb_at %}<span class="muted"> · {{ c.thumb_at|ago }}</span>{% endif %}</span>
+        {% set sd = c|sd %}{% if sd %}<span class="sdTag {{ sd.state }}" title="{{ sd.long }}">{{ sd.short }}</span>{% endif %}
       </div>
     </a>
     {% endfor %}

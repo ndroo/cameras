@@ -2,15 +2,19 @@
 {% block body %}
 <h1>Admin</h1>
 {% if msg %}<p class="notice">{{ msg }}</p>{% endif %}
-<p class="muted small">Tapo cloud link: <span class="dot {{ 'ok' if mqtt_ok else 'bad' }}"></span>{{ 'connected' if mqtt_ok else 'not connected' }}
- · <a href="/admin/mqtt-log">raw device messages</a>
- · <form method="post" action="/admin/test-sms" class="inline"><button class="link" data-busy="sending…">send me a test text</button></form></p>
+<div class="adminLayout">
+<nav class="adminNav" id="adminNav" aria-label="Admin sections">
+  <a href="#cameras">Cameras</a><a href="#people">People</a><a href="#groups">Groups</a><a href="#houses">Houses</a><a href="#system">System</a><a href="#texts">Recent texts</a>
+</nav>
+<div class="adminBody">
 
-<section class="card">
+<section class="card" id="system">
   <h2>System</h2>
+  <p class="small">Tapo cloud link: <span class="dot {{ 'ok' if mqtt_ok else 'bad' }}"></span>{{ 'connected' if mqtt_ok else 'not connected' }}
+   · <a href="/admin/mqtt-log">raw device messages</a>
+   · <form method="post" action="/admin/test-sms" class="inline"><button class="link" data-busy="sending…">send me a test text</button></form></p>
   <p class="small">Heating monitor: {% if heating.last %}last cycle {{ heating.last|ago }} ({{ 'ok' if heating.ok else 'had errors' }}){% else %}not run yet{% endif %}
     <form method="post" action="/admin/heating/run" class="inline"><button class="link" data-busy="starting…">run a cycle now</button></form>
-    · <form method="post" action="/admin/heating/recalibrate" class="inline"><button class="link" data-busy="starting…">recalibrate boiler camera</button></form>
     · <a href="/heating">dashboard</a></p>
   {% if lcd %}<p class="small">Boiler camera: LCD position set {{ lcd.since }} ({{ lcd.how }}){% if lcd.pending %} · recalibration pending{% endif %}. It is found again automatically when the camera is moved.</p>{% endif %}
   <p class="small">Watchdog: {% for w in watch %}<span class="dot {{ 'ok' if w.ok else 'bad' }}"></span>{{ w.url }} ({{ w.at|ago }}) {% endfor %}{% if not watch %}no checks yet{% endif %}</p>
@@ -18,10 +22,10 @@
     <form method="post" action="/admin/backup" class="inline"><button class="link" data-busy="running…">back up now</button></form></p>
 </section>
 
-<section class="card">
+<section class="card" id="houses">
   <h2>Houses</h2>
   {% for h in houses %}
-  <form method="post" action="/admin/house" class="line">
+  <form method="post" action="/admin/house" class="line" data-ajax>
     <input type="hidden" name="id" value="{{ h.id }}">
     <input name="name" value="{{ h.name }}"> <input name="sort" type="number" value="{{ h.sort }}" class="tiny" title="order">
     <button class="secondary small">Save</button> <button class="danger small" name="delete" value="1" onclick="return confirm('Delete this house? Its groups go too.')">Delete</button>
@@ -30,13 +34,13 @@
   <form method="post" action="/admin/house" class="line"><input name="name" placeholder="New house, e.g. 180 Beatrice"> <button class="small">Add house</button></form>
 </section>
 
-<section class="card">
+<section class="card" id="cameras">
   <h2>Cameras</h2>
   <form method="post" action="/admin/import" class="line"><button class="small" data-busy="Asking Tapo…">Import cameras from the Tapo account</button> <span class="muted small">finds any camera or doorbell on the account that isn't here yet</span></form>
   <table class="tbl">
-    <tr><th>Name</th><th>House</th><th>Orientation</th><th>Order</th><th>On</th><th>Status</th><th></th></tr>
+    <tr><th>Name</th><th>House</th><th>Orientation</th><th>Order</th><th>On</th><th>Status</th><th>SD card</th><th></th></tr>
     {% for c in cams %}
-    <tr><form method="post" action="/admin/camera">
+    <tr><form method="post" action="/admin/camera" data-ajax>
       <input type="hidden" name="id" value="{{ c.id }}">
       <td><input name="name" value="{{ c.name }}"><div class="muted tiny">{{ c.model }}{% if c.ptz %} · pan/tilt{% endif %} · {{ c.device_id[:8] }}…</div></td>
       <td><select name="house_id"><option value="0">—</option>{% for h in houses %}<option value="{{ h.id }}" {% if h.id == c.house_id %}selected{% endif %}>{{ h.name }}</option>{% endfor %}</select></td>
@@ -46,18 +50,19 @@
       <td><input name="sort" type="number" value="{{ c.sort }}" class="tiny"></td>
       <td><input type="checkbox" name="enabled" value="1" {% if c.enabled %}checked{% endif %}></td>
       <td><span class="dot {{ 'ok' if c.online == 1 else ('bad' if c.online == 0 else 'unk') }}"></span><span class="muted tiny">{{ c.last_check|ago }}</span></td>
+      <td class="small nowrap">{% set sd = c|sd %}{% if sd %}<span class="sdTag {{ sd.state }}" title="{{ sd.long }}{% if c.sd_at %} (checked {{ c.sd_at|ago }}){% endif %}">{{ sd.short }}</span>{% if sd.size %}<div class="muted tiny">{{ sd.size }} · since {{ sd.since }}</div>{% endif %}{% else %}<span class="muted tiny">not checked yet</span>{% endif %}</td>
       <td class="nowrap"><button class="secondary small">Save</button> <button class="danger small" name="delete" value="1" onclick="return confirm('Remove this camera?')">✕</button></td>
     </form></tr>
     {% endfor %}
   </table>
 </section>
 
-<section class="card">
+<section class="card" id="people">
   <h2>People</h2>
   <table class="tbl">
     <tr><th>Name</th><th>Mobile</th><th>Email</th><th>Set passcode</th><th>Admin</th><th>Last seen</th><th></th></tr>
     {% for p in people %}
-    <tr><form method="post" action="/admin/person">
+    <tr><form method="post" action="/admin/person" data-ajax>
       <input type="hidden" name="id" value="{{ p.id }}">
       <td><input name="name" value="{{ p.name }}"></td>
       <td><input name="phone" value="{{ p.phone }}"></td>
@@ -77,7 +82,7 @@
   <p class="muted small">Admins see every camera and can change everything, including turning on privacy mode (🔒 on a camera) for 1-24 hours. Everyone else only sees what their groups allow. People sign in with a code texted to their mobile or emailed to them, or with their passcode (they can set their own under Account; you can set one here too). If someone is stuck, <b>Link</b> makes a one-time sign-in link (24 hours) you can send them.</p>
 </section>
 
-<section class="card">
+<section class="card" id="groups">
   <h2>Groups</h2>
   <p class="muted small">A group belongs to one house. Its members can watch the house's cameras (all of them, or just the ticked ones) and get the texts it has turned on.</p>
   {% for g in groups %}
@@ -91,8 +96,11 @@
   <details class="group"><summary><b>+ New group</b></summary>{% with g=None %}{% include "group_form.html" %}{% endwith %}</details>
 </section>
 
-<section class="card">
+<section class="card" id="texts">
   <h2>Recent texts</h2>
   <table class="tbl small">{% for s in recent_sms %}<tr><td class="muted">{{ s.at|dt }}</td><td>{{ s.phone }}</td><td>{{ s.kind }}</td><td>{{ s.body }}</td><td class="err">{{ s.error or '' }}</td></tr>{% endfor %}</table>
 </section>
+
+</div></div>
+<script type="module" src="/static/admin.js?v={{ v }}"></script>
 {% endblock %}
