@@ -427,3 +427,8 @@ button.failed{background:var(--bad)!important;color:#fff!important}
 .agrid td{border-top:1px solid var(--line);padding:9px 6px;text-align:center;vertical-align:middle}
 .agrid td:first-child{text-align:left}.agrid td:first-child b{display:block;font-weight:600}.agrid td:first-child .small{display:block;font-size:13px}
 .agrid input{width:18px;height:18px;cursor:pointer}
+/* single-camera fullscreen: picture fills the screen above the controls bar */
+.player:fullscreen{display:flex;flex-direction:column;width:100%;height:100%;border:0;border-radius:0}
+.player:fullscreen .stage{flex:1 1 auto;min-height:0;height:auto!important}
+.player:-webkit-full-screen{display:flex;flex-direction:column;width:100%;height:100%;border:0;border-radius:0}
+.player:-webkit-full-screen .stage{flex:1 1 auto;min-height:0;height:auto!important}

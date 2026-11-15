@@ -23,11 +23,14 @@ const S = { mode: "live", date: D.date, dayStart: D.dayStart, dayEnd: D.dayEnd, 
 const wrap = $("#camWrap");
 let knownAr = 16 / 9; try { knownAr = +localStorage.getItem("ar:" + D.camId) || knownAr; } catch {}
 function noteAr(v) { if (v && v.videoWidth && v.videoHeight) { const ar = v.videoWidth / v.videoHeight; if (Math.abs(ar - knownAr) > 0.01) { knownAr = ar; try { localStorage.setItem("ar:" + D.camId, ar); } catch {} layout(); } } }
+const isFull = () => (document.fullscreenElement || document.webkitFullscreenElement) === $("#player");
 function layout() {
   const side = o.rotate === 90 || o.rotate === 270;
   const ar0 = knownAr;
   const ar = side ? 1 / ar0 : ar0;                       // shape of the picture as shown
   // size the whole column to the picture: as wide as the page allows, but no taller than ~56% of the window
+  // fullscreen: the stage fills whatever the controls bar leaves (CSS flex), no fixed height
+  if (isFull()) { stage.style.aspectRatio = "auto"; stage.style.height = ""; for (const el of [live, clip, poster]) applyToBox(stage, el, o.rotate, o.flip_h, o.flip_v); return; }
   const maxW = wrap.parentElement.clientWidth, maxH = window.innerHeight * 0.56;
   const w = Math.min(maxW, Math.max(320, maxH * ar)), h = w / ar;
   wrap.style.maxWidth = (window.innerWidth >= 1000 ? Math.round(w) + "px" : "");
@@ -251,7 +254,7 @@ $("#player .controls").addEventListener("click", ev => {
     const a2 = document.createElement("a"); a2.download = `${D.name}-${new Date().toISOString().replace(/[:.]/g, "-")}.jpg`.replace(/\s+/g, "_"); a2.href = c.toDataURL("image/jpeg", 0.92); a2.click();
   }
 });
-window.addEventListener("resize", layout); document.addEventListener("fullscreenchange", layout);
+window.addEventListener("resize", layout); document.addEventListener("fullscreenchange", layout); document.addEventListener("webkitfullscreenchange", layout);
 
 // ---------------------------------------------------------------- pan / tilt (cameras with a motor, live view only)
 const ptz = $("#ptz"), PTZ_STEP = 10;
