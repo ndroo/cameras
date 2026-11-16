@@ -68,8 +68,38 @@ def relay_for(device_id):
     return r.json()
 
 
+# Both heating cameras send 1920x1080. Now and then the relay hands over a 1280x720 stream
+# (2026-11-15 17:35 UTC on the zone camera); the zone locator and LED positions are in 1080p
+# pixels, so that frame lost the panel and cost an Opus call. Such a grab is retried once.
+MIN_WIDTH = int(os.environ.get("HEATING_MIN_WIDTH", "1920"))
+
+
+def _width(jpeg):
+    from io import BytesIO
+    from PIL import Image
+    return Image.open(BytesIO(jpeg)).size[0]
+
+
 def grab_once(out, device_id, name="camera", timeout=12, opts=None):
     opts = opts or {"frames": 8, "sharpen": False, "quality": 95}
+    jpeg = _grab_jpeg(device_id, timeout, opts)
+    if MIN_WIDTH and _width(jpeg) < MIN_WIDTH:
+        log(f"{name}: got a {_width(jpeg)} px wide frame, expected {MIN_WIDTH} - grabbing again")
+        try:
+            again = _grab_jpeg(device_id, timeout, opts)
+            if _width(again) >= _width(jpeg):
+                jpeg = again
+        except Exception as e:
+            log(f"{name}: second grab failed ({e}); keeping the small frame")
+    os.makedirs(out, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    p = os.path.join(out, f"{name}_{stamp}.jpg")
+    open(p, "wb").write(jpeg); open(os.path.join(out, f"{name}_latest.jpg"), "wb").write(jpeg)
+    log(f"saved {p} ({len(jpeg)} bytes)")
+    return p
+
+
+def _grab_jpeg(device_id, timeout, opts):
     j = relay_for(device_id)
     sock = tapo.connect_relay(j["relayUrl"], j["relayToken"], j["term"])
     ts = bytearray(); t0 = time.time()
@@ -82,10 +112,4 @@ def grab_once(out, device_id, name="camera", timeout=12, opts=None):
         sock.close()
     if len(ts) < 50_000:
         raise RuntimeError(f"not enough video received ({len(ts)} TS bytes)")
-    jpeg = ts_to_jpeg(ts, frames=opts["frames"], sharpen=opts["sharpen"], quality=opts["quality"])
-    os.makedirs(out, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    p = os.path.join(out, f"{name}_{stamp}.jpg")
-    open(p, "wb").write(jpeg); open(os.path.join(out, f"{name}_latest.jpg"), "wb").write(jpeg)
-    log(f"saved {p} ({len(jpeg)} bytes)")
-    return p
+    return ts_to_jpeg(ts, frames=opts["frames"], sharpen=opts["sharpen"], quality=opts["quality"])
