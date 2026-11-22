@@ -489,3 +489,12 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 .optList button{margin:0;width:100%;text-align:left;padding:8px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--line);color:var(--fg);display:flex;flex-direction:column;gap:2px;font-weight:400}
 .optList button b{font-size:14px}.optList button span{font-size:12px;color:var(--muted)}
 .optList button.active{border-color:var(--acc);background:rgba(79,140,255,.14)}.optList button.busy{opacity:.6}
+.setBox{width:400px;max-height:88vh;overflow:auto}
+.setSec{border-top:1px solid var(--line);padding:10px 0 4px;margin-top:8px}
+.setRow{display:flex;align-items:center;gap:8px;margin:6px 0}.setRow input[type=range]{flex:1}.setRow input:not([type]){flex:1;margin:0}.setRow button{width:auto;margin:0}
+.tog{display:inline-flex;align-items:center;gap:6px;min-width:96px;font-size:14px}.tog input{width:auto;margin:0}
+.sensV{min-width:22px;text-align:right}
+.setList{list-style:none;margin:4px 0;padding:0}.setList li{display:flex;align-items:center;gap:10px;padding:4px 0}.setList li span{flex:1}
+.danger{color:var(--bad)}.ok{color:var(--ok,#34c759)}
+.controls button.alarm{background:var(--bad);color:#fff;animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.6}}

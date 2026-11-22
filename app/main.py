@@ -482,6 +482,53 @@ def events_page(request: Request):
     return _remember_house(r, pick) if setc else r
 
 
+@app.get("/cam/{cam_id}/settings.json")
+async def cam_settings_get(request: Request, cam_id: int):
+    """Detection, spotlight, card and saved positions, read live from the camera (admins only)."""
+    require(request, admin=True)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404)
+    try:
+        return await asyncio.get_event_loop().run_in_executor(None, lambda: tapo.camera_settings(cloud, cam["device_id"], ptz=bool(cam["ptz"])))
+    except Exception as e:
+        log.info("settings %s: %s", cam["name"], e)
+        raise HTTPException(502, "The camera didn't answer. Try again.")
+
+
+CAM_ACTIONS = {"detect", "reboot", "format", "light", "siren", "preset_go", "preset_save", "preset_delete"}
+
+
+@app.post("/cam/{cam_id}/action")
+async def cam_action(request: Request, cam_id: int, action: str = Form(...), kind: str = Form(""), on: int = Form(0),
+                     sens: str = Form(""), id: str = Form(""), name: str = Form("")):
+    me = require(request, admin=True)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404)
+    if action not in CAM_ACTIONS or (action == "detect" and kind not in tapo.DETECTORS):
+        raise HTTPException(400, "Unknown action")
+    if action.startswith("preset") and not cam["ptz"]:
+        raise HTTPException(400, "This camera can't pan or tilt.")
+    kw = {"kind": kind, "on": bool(on), "sens": max(1, min(100, int(sens))) if sens.isdigit() else None, "id": id, "name": name.strip()[:30]}
+    if action == "preset_save" and not kw["name"]:
+        raise HTTPException(400, "Give the position a name.")
+    lock = _ptz_locks.setdefault(cam_id, threading.Lock())
+
+    def go():
+        with lock:
+            return tapo.camera_action(cloud, cam["device_id"], action, **kw)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, go)
+    except Exception as e:
+        log.warning("action %s on %s: %s", action, cam["name"], e)
+        return JSONResponse({"ok": False, "error": f"The camera didn't do that ({e})."}, status_code=502)
+    log.info("action %s on %s by %s: %s", action, cam["name"], me["name"], {k: v for k, v in kw.items() if v})
+    if action == "format":
+        db.run("UPDATE cameras SET sd_at=0 WHERE id=?", cam_id)       # re-check the card on the next health pass
+    return {"ok": True}
+
+
 @app.get("/cam/{cam_id}/image.json")
 async def cam_image_get(request: Request, cam_id: int):
     """Current day/night setting, read live from the camera (admins only)."""
@@ -1688,6 +1735,8 @@ def refresh_sd(cam):
         status = (info or {}).get("status", "")
         if not info or status in ("offline", "") or info.get("detect_status") == "offline":
             sd = {"state": "none"}
+        elif info.get("detect_status") == "failed" or info.get("rw_attr") == "r" or (status == "insufficient" and info.get("total_space") == "0B" and info.get("video_total_space") == "0B"):
+            sd = {"state": "problem", "status": "unreadable" if info.get("detect_status") == "failed" else ("read-only" if info.get("rw_attr") == "r" else status)}
         elif status in ("normal", "full", "insufficient"):
             total = info.get("video_total_space") if info.get("total_space") == "0B" else info.get("total_space")
             sd = {"state": "card", "status": status, "total": total, "free": info.get("free_space"),
@@ -1695,6 +1744,18 @@ def refresh_sd(cam):
         else:
             sd = {"state": "problem", "status": status}
         db.run("UPDATE cameras SET sd=?, sd_at=? WHERE id=?", json.dumps(sd), time.time(), cam["id"])
+        # text admins once when a card goes bad (and once when it's fine again)
+        key, was = f"sdalert:{cam['id']}", db.kv_get(f"sdalert:{cam['id']}")
+        if sd["state"] == "problem" and was != "problem":
+            db.kv_set(key, "problem")
+            for p in _admins():
+                if p["phone"]:
+                    sms.send(p["phone"], f"{cam['name']}: the SD card is {sd.get('status') or 'not working'}, so it isn't recording. It likely needs replacing.", kind="sdcard", person_id=p["id"])
+        elif sd["state"] == "card" and was == "problem":
+            db.kv_set(key, "ok")
+            for p in _admins():
+                if p["phone"]:
+                    sms.send(p["phone"], f"{cam['name']}: the SD card is working again.", kind="sdcard", person_id=p["id"])
     except Exception as e:
         log.info("sd check %s: %s", cam["name"], e)
 

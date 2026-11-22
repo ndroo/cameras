@@ -559,6 +559,72 @@ def set_image_mode(cloud, device_id, mode=None, night=None):
         raise RuntimeError(f"camera refused: {[x.get('error_code') for x in bad]}")
 
 
+# ---- camera settings (shapes from the Tapo app: libtapocameranetwork Method/Module/Section)
+DETECTORS = {"motion": ("getDetectionConfig", "setDetectionConfig", "motion_detection", "motion_det", "digital_sensitivity"),
+             "person": ("getPersonDetectionConfig", "setPersonDetectionConfig", "people_detection", "detection", "sensitivity"),
+             "vehicle": ("getVehicleDetectionConfig", "setVehicleDetectionConfig", "vehicle_detection", "detection", "sensitivity"),
+             "pet": ("getPetDetectionConfig", "setPetDetectionConfig", "pet_detection", "detection", "sensitivity")}
+
+
+def camera_settings(cloud, device_id, ptz=False):
+    """Everything the settings panel shows, in one round trip. Unsupported parts come back as None."""
+    reqs = [{"method": g, "params": {mod: {"name": [sec]}}} for g, _, mod, sec, _ in DETECTORS.values()]
+    reqs += [{"method": "getNightVisionCapability", "params": {"image_capability": {"name": ["supplement_lamp"]}}},
+             {"method": "getWhitelampStatus", "params": {"image": {"get_wtl_status": ["null"]}}},
+             {"method": "getSdCardStatus", "params": {"harddisk_manage": {"table": ["hd_info"]}}}]
+    if ptz:
+        reqs.append({"method": "getPresetConfig", "params": {"preset": {"name": ["preset"]}}})
+    r = device_call(cloud, device_id, reqs, timeout=25)
+    ok = lambda i: len(r) > i and not r[i].get("error_code")
+    out = {"detect": {}}
+    for i, (k, (_, _, mod, sec, sens)) in enumerate(DETECTORS.items()):
+        if ok(i):
+            c = _dig(r[i]["result"], mod, sec) or {}
+            out["detect"][k] = {"on": c.get("enabled") == "on", "sens": int(c.get(sens) or 50)}
+    n = len(DETECTORS)
+    lamps = (_dig(r[n]["result"], "image_capability", "supplement_lamp", "supplement_lamp_type") or []) if ok(n) else []
+    out["light"] = {"on": bool((r[n + 1].get("result") or {}).get("status")), "left": (r[n + 1].get("result") or {}).get("rest_time", 0)} if "white_lamp" in lamps and ok(n + 1) else None
+    sd = _unwrap_list(_dig(r[n + 2].get("result", {}), "harddisk_manage", "hd_info")) if ok(n + 2) else []
+    out["sd"] = sd[0] if sd else None
+    if ptz and ok(n + 3):
+        p = _dig(r[n + 3]["result"], "preset", "preset") or {}
+        out["presets"] = [{"id": i, "name": nm} for i, nm in zip(p.get("id", []), p.get("name", []))]
+    elif ptz:
+        out["presets"] = []
+    return out
+
+
+def camera_action(cloud, device_id, action, **kw):
+    """One settings change or command. Raises with the camera's error code if it refuses."""
+    if action == "detect":
+        _, setm, mod, sec, sens = DETECTORS[kw["kind"]]
+        body = {"enabled": "on" if kw["on"] else "off"}
+        if kw.get("sens") is not None:
+            body[sens] = str(int(kw["sens"]))
+        req = {"method": setm, "params": {mod: {sec: body}}}
+    elif action == "reboot":
+        req = {"method": "rebootDevice", "params": {"system": {"reboot": "null"}}}
+    elif action == "format":
+        req = {"method": "formatSdCard", "params": {"harddisk_manage": {"format_hd": "1"}}}
+    elif action == "light":          # flips the spotlight (the app's "reverse" call)
+        req = {"method": "reverseWhitelampStatus", "params": {"image": {"reverse_wtl_status": ["null"]}}}
+    elif action == "siren":
+        req = {"method": "doManualAlarm", "params": {"msg_alarm": {"manual_alarm": {"action": "start" if kw["on"] else "stop"}}}}
+    elif action == "preset_go":
+        req = {"method": "motorMoveToPreset", "params": {"preset": {"goto_preset": {"id": str(kw["id"])}}}}
+    elif action == "preset_save":
+        req = {"method": "addMotorPostion", "params": {"preset": {"set_preset": {"name": kw["name"], "save_ptz": "1"}}}}
+    elif action == "preset_delete":
+        req = {"method": "deletePreset", "params": {"preset": {"remove_preset": {"id": [str(kw["id"])]}}}}
+    else:
+        raise ValueError("unknown action")
+    r = device_call(cloud, device_id, [req], timeout=30)
+    code = r[0].get("error_code", -1) if r else -1
+    if code != 0:
+        raise RuntimeError(f"camera error {code}")
+    return r[0].get("result") or {}
+
+
 def _client_part(obj, session_id=None):
     data = json.dumps(obj, separators=(",", ":")).encode()
     extra = f"X-Session-Id: {session_id}\r\n".encode() if session_id else b""

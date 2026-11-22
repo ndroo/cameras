@@ -166,6 +166,106 @@ if (D.isAdmin) {
   modal.addEventListener("click", ev => { if (ev.target === modal) modal.hidden = true; });
 }
 
+// ---------------------------------------------------------------- camera settings, spotlight, siren, saved positions (admins)
+if (D.isAdmin) {
+  const modal = $("#setModal"), err = $("#setErr"), okEl = $("#setOk"), lightBtn = $("#lightBtn"), sirenBtn = $("#sirenBtn"), presetSel = $("#presetSel");
+  let cfg = null;
+  const DNAMES = { motion: "Motion", person: "People", vehicle: "Vehicles", pet: "Pets" };
+  async function act(fields, quiet) {
+    const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+    const r = await fetch(`/cam/${D.camId}/action`, { method: "POST", body: fd }), j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || j.detail || "The camera didn't do that.");
+    if (!quiet) { okEl.textContent = "Done."; okEl.hidden = false; setTimeout(() => { okEl.hidden = true; }, 2500); }
+  }
+  const fail = e => { err.textContent = e.message; err.hidden = false; };
+  async function load() {
+    const r = await fetch(`/cam/${D.camId}/settings.json`); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "The camera didn't answer.");
+    cfg = await r.json();
+    lightBtn.hidden = !cfg.light; lightBtn.classList.toggle("active", !!(cfg.light && cfg.light.on));
+    drawPresets();
+    return cfg;
+  }
+  function drawPresets() {
+    const ps = (cfg && cfg.presets) || [];
+    presetSel.hidden = !ps.length || S.mode !== "live";
+    presetSel.innerHTML = `<option value="">📍 Go to…</option>` + ps.map(p => `<option value="${p.id}">${p.name.replace(/</g, "&lt;")}</option>`).join("");
+  }
+  function drawSettings() {
+    const dd = $("#setDetect"); dd.innerHTML = "";
+    for (const [k, v] of Object.entries(cfg.detect)) {
+      const row = document.createElement("div"); row.className = "setRow";
+      row.innerHTML = `<label class="tog"><input type="checkbox" ${v.on ? "checked" : ""}> ${DNAMES[k]}</label><input type="range" min="1" max="100" value="${v.sens}" title="Sensitivity" ${v.on ? "" : "disabled"}><span class="tiny muted sensV">${v.sens}</span>`;
+      const [cb, rg, lab] = [row.querySelector("input[type=checkbox]"), row.querySelector("input[type=range]"), row.querySelector(".sensV")];
+      const save = async () => { err.hidden = true; rg.disabled = !cb.checked; try { await act({ action: "detect", kind: k, on: cb.checked ? 1 : 0, sens: rg.value }); v.on = cb.checked; v.sens = +rg.value; } catch (e) { cb.checked = v.on; rg.value = v.sens; lab.textContent = v.sens; rg.disabled = !v.on; fail(e); } };
+      cb.addEventListener("change", save); rg.addEventListener("input", () => { lab.textContent = rg.value; }); rg.addEventListener("change", save);
+      dd.appendChild(row);
+    }
+    if (!Object.keys(cfg.detect).length) dd.innerHTML = `<span class="muted small">This camera didn't report its detection settings.</span>`;
+    $("#setPosWrap").hidden = !cfg.presets;
+    const pl = $("#setPos"); pl.innerHTML = "";
+    for (const p of cfg.presets || []) {
+      const li = document.createElement("li"); li.innerHTML = `<span></span><button type="button" class="link small">Go</button><button type="button" class="link small">Delete</button>`;
+      li.firstChild.textContent = p.name;
+      const [go, del] = li.querySelectorAll("button");
+      go.addEventListener("click", () => { err.hidden = true; act({ action: "preset_go", id: p.id }).catch(fail); });
+      del.addEventListener("click", async () => { if (!confirm(`Delete the saved position "${p.name}"?`)) return; err.hidden = true; try { await act({ action: "preset_delete", id: p.id }); await load(); drawSettings(); } catch (e) { fail(e); } });
+      pl.appendChild(li);
+    }
+    if (cfg.presets && !cfg.presets.length) pl.innerHTML = `<li class="muted small">None yet.</li>`;
+    const sd = cfg.sd, sdEl = $("#setSd"), fmt = $("#sdFormat");
+    if (!sd || sd.status === "offline") { sdEl.textContent = "No card in the camera."; fmt.hidden = true; }
+    else {
+      const bad = sd.detect_status === "failed" || sd.rw_attr === "r";
+      const size = sd.total_space === "0B" ? sd.video_total_space : sd.total_space;
+      sdEl.innerHTML = bad ? `<span class="err">The camera can't use this card (${sd.detect_status === "failed" ? "unreadable" : "read-only"}, ${size}). It likely needs replacing.</span>`
+        : `${size}, ${sd.free_space} free · ${sd.status}${sd.loop_record_status === "1" ? " · overwrites oldest footage" : ""}`;
+      fmt.hidden = false;
+    }
+  }
+  $("#setBtn").hidden = false;
+  $("#setBtn").addEventListener("click", async () => {
+    modal.hidden = false; err.hidden = true; okEl.hidden = true; $("#setBody").hidden = true; $("#setLoading").hidden = false;
+    try { await load(); drawSettings(); $("#setLoading").hidden = true; $("#setBody").hidden = false; }
+    catch (e) { $("#setLoading").hidden = true; fail(e); }
+  });
+  $("#setClose").addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", ev => { if (ev.target === modal) modal.hidden = true; });
+  $("#posSave").addEventListener("click", async ev => {
+    const name = $("#posName").value.trim(); if (!name) { fail(new Error("Give the position a name.")); return; }
+    ev.target.disabled = true; err.hidden = true;
+    try { await act({ action: "preset_save", name }); $("#posName").value = ""; await load(); drawSettings(); } catch (e) { fail(e); } finally { ev.target.disabled = false; }
+  });
+  $("#sdFormat").addEventListener("click", async ev => {
+    if (!confirm("Format the SD card? Every recording on it is erased. This can't be undone.")) return;
+    ev.target.disabled = true; err.hidden = true;
+    try { await act({ action: "format" }); $("#setSd").textContent = "Formatting… check back in a minute."; } catch (e) { fail(e); } finally { ev.target.disabled = false; }
+  });
+  $("#camReboot").addEventListener("click", async ev => {
+    if (!confirm("Restart this camera? It goes offline for about a minute.")) return;
+    ev.target.disabled = true; err.hidden = true;
+    try { await act({ action: "reboot" }); okEl.textContent = "Restarting. Live view comes back in about a minute."; okEl.hidden = false; } catch (e) { fail(e); } finally { ev.target.disabled = false; }
+  });
+  presetSel.addEventListener("change", async () => {
+    const id = presetSel.value; presetSel.value = ""; if (!id) return;
+    try { await act({ action: "preset_go", id }, true); } catch (e) { status.textContent = e.message; }
+  });
+  lightBtn.addEventListener("click", async () => {
+    lightBtn.disabled = true;
+    try { await act({ action: "light" }, true); await load(); status.textContent = cfg.light && cfg.light.on ? "Spotlight on." : "Spotlight off."; }
+    catch (e) { status.textContent = e.message; } finally { lightBtn.disabled = false; }
+  });
+  let sirenOn = false;
+  sirenBtn.hidden = false;
+  sirenBtn.addEventListener("click", async () => {
+    if (!sirenOn && !confirm("Sound the siren on this camera? It's loud. Press 🚨 again to stop it.")) return;
+    sirenBtn.disabled = true;
+    try { await act({ action: "siren", on: sirenOn ? 0 : 1 }, true); sirenOn = !sirenOn; sirenBtn.classList.toggle("alarm", sirenOn); sirenBtn.title = sirenOn ? "Stop the siren" : "Siren"; status.textContent = sirenOn ? "Siren sounding. Press 🚨 to stop it." : "Siren stopped."; }
+    catch (e) { status.textContent = e.message; } finally { sirenBtn.disabled = false; }
+  });
+  load().catch(() => {});            // spotlight button + saved positions, quietly
+  window.__drawPresets = drawPresets;
+}
+
 // ---------------------------------------------------------------- card footage source
 // iPhones only play a plain <video src> from servers that answer byte-range requests,
 // and card footage is made on the fly (no length), so there it never played. Where the
@@ -378,7 +478,7 @@ async function ptzMove(dir, btn) {
   catch { ptz.classList.add("err"); setTimeout(() => ptz.classList.remove("err"), 1500); }
   finally { ptzBusy = false; btn.classList.remove("busy"); }
 }
-function showPtz() { ptz.hidden = !(D.ptz && S.mode === "live" && !S.priv); }
+function showPtz() { ptz.hidden = !(D.ptz && S.mode === "live" && !S.priv); if (window.__drawPresets) window.__drawPresets(); }
 if (D.ptz) {
   stage.classList.add("hasPtz");
   const stop = () => { if (ptzHold) { clearInterval(ptzHold); ptzHold = null; } };
