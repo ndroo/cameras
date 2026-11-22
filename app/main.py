@@ -299,7 +299,10 @@ def account(request: Request, msg: str = "", err: str = ""):
         cells = [next((x for x in g["kinds"] if x["kind"] == k), None) for g in groups]
         if any(cells):
             rows.append({"kind": k, "label": ALERT_LABELS[k], "help": ALERT_HELP[k], "cells": cells})
-    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions, alert_groups=groups, alert_rows=rows)
+    custom = [dict(r) | {"labels": ", ".join(ALERT_KIND_LABELS[k][0] for k in (r["kinds"] or "").split(",") if k in ALERT_KIND_LABELS) or "nothing"}
+              for r in db.q("SELECT ca.camera_id, ca.kinds, c.name FROM camera_alerts ca JOIN cameras c ON c.id=ca.camera_id WHERE ca.person_id=? ORDER BY c.name", me["id"])
+              if db.can_view(me, r["camera_id"])]
+    return render(request, "account.html", me=me, msg=msg, err=err, sessions=sessions, alert_groups=groups, alert_rows=rows, custom_alerts=custom)
 
 
 @app.post("/account/alerts")
@@ -480,6 +483,58 @@ def events_page(request: Request):
                     f"ORDER BY e.at DESC LIMIT 200", *ids)
     r = render(request, "events.html", events=rows, me=me, house_pick=pick, house_list=house_list)
     return _remember_house(r, pick) if setc else r
+
+
+ALERT_KIND_LABELS = {"doorbell": ("Doorbell pressed", ""), "person": ("People", "a person is detected"),
+                     "vehicle": ("Vehicles", "a car or truck is detected"), "motion": ("Any motion", "every detection, noisy"),
+                     "tamper": ("Tampering", "covered, knocked or moved"), "offline": ("Offline / back online", f"after {OFFLINE_ALERT_SECS // 60} min down")}
+
+
+def _alert_kinds_for(cam):
+    """Choices that make sense for this camera (doorbell only on doorbells)."""
+    is_bell = (cam["model"] or "").upper().startswith("D")
+    return [k for k in db.CAMERA_ALERT_KINDS if k != "doorbell" or is_bell]
+
+
+@app.get("/cam/{cam_id}/alerts.json")
+def cam_alerts_get(request: Request, cam_id: int):
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    row = db.one("SELECT kinds FROM camera_alerts WHERE person_id=? AND camera_id=?", me["id"], cam_id)
+    if row:
+        on, custom = set((row["kinds"] or "").split(",")), True
+    else:   # what the groups give this person today, shown as the starting point
+        on, custom = {k for k in db.ALERT_KINDS if any(p["id"] == me["id"] for p in db._group_recipients(cam_id, k))}, False
+        if "motion" in on:
+            on |= {"person", "vehicle"}
+    return {"custom": custom, "via": me["alert_via"] or "text", "hasEmail": bool(me["email"]), "hasPhone": bool(me["phone"]),
+            "kinds": [{"kind": k, "label": ALERT_KIND_LABELS[k][0], "help": ALERT_KIND_LABELS[k][1], "on": k in on} for k in _alert_kinds_for(cam)]}
+
+
+@app.post("/cam/{cam_id}/alerts")
+async def cam_alerts_set(request: Request, cam_id: int):
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404)
+    form = await request.form()
+    if form.get("reset"):
+        db.run("DELETE FROM camera_alerts WHERE person_id=? AND camera_id=?", me["id"], cam_id)
+        return {"ok": True}
+    kinds = [k for k in db.CAMERA_ALERT_KINDS if k in form.getlist("kind")]
+    db.run("INSERT INTO camera_alerts(person_id,camera_id,kinds) VALUES(?,?,?) ON CONFLICT(person_id,camera_id) DO UPDATE SET kinds=excluded.kinds",
+           me["id"], cam_id, ",".join(kinds))
+    return {"ok": True}
+
+
+@app.post("/account/alert-via")
+async def account_alert_via(request: Request, via: str = Form("text")):
+    me = require(request)
+    if via not in ("text", "email", "both"):
+        raise HTTPException(400)
+    db.run("UPDATE people SET alert_via=? WHERE id=?", via, me["id"])
+    return RedirectResponse("/account#alerts", status_code=303)
 
 
 @app.get("/cam/{cam_id}/settings.json")
@@ -1518,7 +1573,7 @@ def _flush_batch():
             text = " ".join(parts)
             if base and any("online" in k for k in kinds):
                 text += f" {base}/"
-            sms.send(p["phone"], text, kind="status", person_id=pid)
+            deliver(p, text, kind="status", subject="Camera status")
 
 
 def _queue_alert(person, cam, kind):
@@ -1553,7 +1608,8 @@ def notify_event(cam, kind, detail=""):
     base = os.environ.get("BASE_URL", "").rstrip("/")
     if base and kind != "offline":
         text += f" {base}/cam/{cam['id']}"
-    for p in db.recipients_for(cam["id"], kind):
+    labels = [l.strip() for l in what.split(",")] if what else []
+    for p in db.recipients_for(cam["id"], kind, labels):
         key = (p["id"], cam["id"], kind)
         if time.time() - _last_sms.get(key, 0) < COOLDOWN.get(kind, 600):
             continue
@@ -1561,7 +1617,18 @@ def notify_event(cam, kind, detail=""):
         if kind in BATCH_KINDS:
             _queue_alert(p, cam, kind)        # one text per house, sent after the window closes
         else:
-            sms.send(p["phone"], text, kind=kind, person_id=p["id"])
+            deliver(p, text, kind=kind, subject=f"{kind.capitalize()}: {where}")
+
+
+def deliver(person, text, kind="misc", subject="Camera alert"):
+    """Send an alert the way the person asked for: text, email or both."""
+    via = (person["alert_via"] if "alert_via" in person.keys() else None) or "text"
+    if via in ("text", "both") and person["phone"]:
+        sms.send(person["phone"], text, kind=kind, person_id=person["id"])
+    if via in ("email", "both") and person["email"]:
+        sms.send_email(person["email"], subject, text, kind=kind, person_id=person["id"])
+    if via == "email" and not person["email"] and person["phone"]:      # asked for email but has none: don't drop it
+        sms.send(person["phone"], text, kind=kind, person_id=person["id"])
 
 
 def on_mqtt_event(topic, payload):
