@@ -517,6 +517,29 @@ async def cam_ptz(request: Request, cam_id: int, x: int = Form(0), y: int = Form
     return JSONResponse({"ok": True})
 
 
+@app.post("/cam/{cam_id}/calibrate")
+async def cam_calibrate(request: Request, cam_id: int):
+    """Re-home the pan/tilt motor (admins only)."""
+    me = require(request, admin=True)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404, "No such camera")
+    if not cam["ptz"]:
+        return JSONResponse({"ok": False, "error": "This camera cannot pan or tilt."}, status_code=400)
+    lock = _ptz_locks.setdefault(cam_id, threading.Lock())
+
+    def go():
+        with lock:
+            tapo.ptz_calibrate(cloud, cam["device_id"])
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, go)
+    except Exception as e:
+        log.warning("calibrate %s: %s", cam["name"], e)
+        return JSONResponse({"ok": False, "error": "The camera did not start calibrating. Try again."}, status_code=502)
+    log.info("calibrate %s by %s", cam["name"], me["name"])
+    return JSONResponse({"ok": True})
+
+
 @app.post("/garage/{opener_id}/press")
 async def garage_press(request: Request, opener_id: int):
     """One momentary press (open/close). Admin-only, like pan/tilt and privacy."""
