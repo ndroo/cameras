@@ -36,6 +36,7 @@
     <button type="button" data-act="full" title="Fullscreen">⛶</button>
     <span class="moreRow" id="moreRow">
       <button type="button" id="privBtn" title="Privacy mode" hidden>🔒</button>
+      <button type="button" id="imgBtn" title="Day / night mode" hidden>◐</button>
       <button type="button" data-act="rotate" title="Rotate 90°">⟳</button>
       <button type="button" data-act="flip_h" title="Mirror">↔</button>
       <button type="button" data-act="flip_v" title="Flip">↕</button>
@@ -53,6 +54,27 @@
     <button type="button" id="privGo" data-busy="Turning on…">Turn on privacy</button>
     <button type="button" class="secondary small" id="privClose" style="margin-top:8px;width:100%">Cancel</button>
     <p class="err small" id="privErr" hidden></p>
+  </div>
+</div>
+
+<div class="modal" id="imgModal" hidden>
+  <div class="modalBox">
+    <b>Day / night mode</b>
+    <div class="small muted" id="imgLoading" style="margin:8px 0">Asking the camera…</div>
+    <div id="imgBody" hidden>
+      <div class="small" style="margin:10px 0 6px">Picture</div>
+      <div class="optList" id="imgMode">
+        <button type="button" data-v="auto"><b>Auto</b><span>Colour in daylight, black &amp; white (infrared) in the dark</span></button>
+        <button type="button" data-v="off"><b>Always colour</b><span>Day mode all the time; dark scenes stay dark</span></button>
+        <button type="button" data-v="on"><b>Always black &amp; white</b><span>Night mode (infrared) all the time</span></button>
+      </div>
+      <div id="imgNightWrap" hidden>
+        <div class="small" style="margin:12px 0 6px">At night</div>
+        <div class="optList" id="imgNight"></div>
+      </div>
+    </div>
+    <p class="err small" id="imgErr" hidden></p>
+    <button type="button" class="secondary small" id="imgClose" style="margin-top:12px;width:100%">Close</button>
   </div>
 </div>
 

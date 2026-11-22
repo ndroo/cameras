@@ -523,6 +523,42 @@ def ptz_calibrate(cloud, device_id):
         raise RuntimeError(f"calibrate error {code}")
 
 
+NIGHT_VISION_MODES = ("inf_night_vision", "md_night_vision", "wtl_night_vision", "dbl_night_vision")
+
+
+def image_mode(cloud, device_id):
+    """Day/night setting: mode = inf_type (auto | off = always colour | on = always infrared B&W),
+    night = what night vision does (infrared, colour on motion, full colour...), nights = the options this model has."""
+    r = device_call(cloud, device_id, [
+        {"method": "getDayNightModeConfig", "params": {"image": {"name": "common"}}},
+        {"method": "getNightVisionModeConfig", "params": {"image": {"name": "switch"}}},
+        {"method": "getNightVisionCapability", "params": {"image_capability": {"name": ["supplement_lamp"]}}}], timeout=20)
+    get = lambda i, *ks: _dig(r[i].get("result", {}), *ks) if len(r) > i and not r[i].get("error_code") else None
+    nights = get(2, "image_capability", "supplement_lamp", "night_vision_mode_range") or []
+    return {"mode": get(0, "image", "common", "inf_type"), "night": get(1, "image", "switch", "night_vision_mode"),
+            "nights": [n for n in nights if n in NIGHT_VISION_MODES]}
+
+
+def _dig(d, *ks):
+    for k in ks:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+
+def set_image_mode(cloud, device_id, mode=None, night=None):
+    reqs = []
+    if mode:
+        reqs.append({"method": "setDayNightModeConfig", "params": {"image": {"common": {"inf_type": mode}}}})
+    if night:
+        reqs.append({"method": "setNightVisionModeConfig", "params": {"image": {"switch": {"night_vision_mode": night}}}})
+    r = device_call(cloud, device_id, reqs, timeout=20)
+    bad = [x for x in r if x.get("error_code")]
+    if bad or len(r) != len(reqs):
+        raise RuntimeError(f"camera refused: {[x.get('error_code') for x in bad]}")
+
+
 def _client_part(obj, session_id=None):
     data = json.dumps(obj, separators=(",", ":")).encode()
     extra = f"X-Session-Id: {session_id}\r\n".encode() if session_id else b""
