@@ -50,6 +50,8 @@ MIGRATIONS = [
     "ALTER TABLE cameras ADD COLUMN offline_alerted INTEGER DEFAULT 0",   # 1 once the offline text went out
     "ALTER TABLE cameras ADD COLUMN sd TEXT",       # JSON card summary {state, total, free, oldest, loop}; NULL until checked
     "ALTER TABLE cameras ADD COLUMN sd_at REAL",    # when the card was last checked
+    # footage lists per camera per day, so past days and multi-day views don't ask the card every time
+    "CREATE TABLE IF NOT EXISTS clip_cache (camera_id INTEGER, date TEXT, clips TEXT, events TEXT, at REAL, PRIMARY KEY (camera_id, date))",
     "CREATE TABLE IF NOT EXISTS garage_openers (id INTEGER PRIMARY KEY, house_id INTEGER REFERENCES houses(id) ON DELETE CASCADE, camera_id INTEGER REFERENCES cameras(id) ON DELETE SET NULL, name TEXT NOT NULL, backend TEXT DEFAULT 'shelly', host TEXT, auth TEXT, relay INTEGER DEFAULT 0, pulse REAL DEFAULT 0.5, state_input INTEGER, state_invert INTEGER DEFAULT 0, created REAL)",
 ]
 

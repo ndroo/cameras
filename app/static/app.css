@@ -447,3 +447,41 @@ button.failed{background:var(--bad)!important;color:#fff!important}
 .wallTile .tag .garageTile:hover{background:var(--acc);border-color:var(--acc)}
 .wallTile .tag .garageTile.ok{background:var(--ok);border-color:var(--ok)}
 .wallTile .tag .garageTile.bad{background:var(--bad);border-color:var(--bad)}
+
+/* ---- footage v2: range picker, zoom row, lanes, hover time, overview, download jobs */
+.tlTop{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:space-between}
+.seg3{display:inline-flex;background:var(--line);border-radius:10px;padding:2px;gap:2px}
+.seg3 button{margin:0;width:auto;padding:6px 11px;font-size:13px;font-weight:600;border-radius:8px;background:transparent;color:var(--fg);white-space:nowrap}
+.seg3 button.active{background:var(--acc);color:#fff}
+.rangeTitle{font-size:14px;flex:1;text-align:right}
+.tlTop .dayNav{flex:1;justify-content:flex-end}
+.zoomRow{display:flex;align-items:center;gap:6px;margin:2px 0 6px}.zoomBtns{display:inline-flex;gap:4px;flex-wrap:wrap}
+.zoomRow .tool{padding:4px 9px;font-size:12px}.zoomRow .tool.active{background:var(--acc);color:#fff}.zoomRow .tool:disabled{opacity:.35}
+.track{height:54px}
+.track .segs .seg{top:16px;bottom:0}
+.track .marks .mark{top:2px;bottom:auto;height:12px;width:4px;margin-left:-2px;border-radius:2px}
+.track .days{position:absolute;inset:0;pointer-events:none}.dayBand{position:absolute;top:0;bottom:0;background:rgba(127,127,127,.09)}
+.tick.midnight{border-left:1px solid var(--fg);opacity:.6}
+.track .bubble{position:absolute;bottom:calc(100% + 8px);transform:translateX(-50%);background:var(--fg);color:var(--bg);font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px;white-space:nowrap;pointer-events:none;z-index:5}
+.track{overflow:visible}.track .segs{overflow:hidden}
+.mini{position:relative;height:10px;margin:-2px 0 16px;background:var(--bg);border:1px solid var(--line);border-radius:4px;cursor:pointer;touch-action:none}
+.mini .segs{position:absolute;inset:0;overflow:hidden}.mini .seg{position:absolute;top:0;bottom:0;background:rgba(79,140,255,.55)}
+.mini .win{position:absolute;top:-2px;bottom:-2px;border:2px solid var(--fg);border-radius:3px;pointer-events:none}
+.cutGrid{display:grid;grid-template-columns:auto auto auto auto 1fr;justify-items:start;gap:6px 8px;align-items:center;margin:8px 0}
+.cutLbl{font-size:13px;color:var(--muted)}.nudge{display:inline-flex;gap:3px}
+.nudge button{margin:0;width:auto;padding:3px 7px;font-size:12px;border-radius:7px;background:var(--line);color:var(--fg)}
+.cutRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cutRow button{width:auto;margin:0}
+@media (max-width:560px){.cutGrid{grid-template-columns:auto 1fr auto}.cutGrid .nudge:nth-of-type(odd){display:none}.cutGrid .link{grid-column:1/-1;justify-self:start}}
+.dlList{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:0 0 10px}
+.dlList ul{list-style:none;margin:6px 0 0;padding:0}.dlList li{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
+.dlRight{display:inline-flex;align-items:center;gap:8px}.dlRight .btn{padding:5px 10px;font-size:13px}
+.pbarS{display:inline-block;width:90px;height:6px;border-radius:3px;background:var(--line);overflow:hidden}.pbarS i{display:block;height:100%;background:var(--acc);transition:width .5s}
+.legend .lk{margin:0;width:auto;padding:2px 6px;border-radius:6px;background:transparent;color:var(--fg);font-size:13px;font-weight:400}
+.legend .lk.off{opacity:.4;text-decoration:line-through}
+ul.evList li.evDay{cursor:default;font-weight:600;font-size:13px;color:var(--muted);padding-top:8px}
+ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13px;border-radius:7px;background:var(--line);color:var(--fg)}
+.seekBtns{display:inline-flex;gap:3px}.seekBtns button{margin:0;width:auto;padding:4px 7px;font-size:12px}
+.seekBtns:not(.playing) button[data-seek="-10"],.seekBtns:not(.playing) button[data-seek="10"]{display:none}
+@media (max-width:560px){.seekBtns button[data-seek="-10"],.seekBtns button[data-seek="10"]{padding:4px 5px}}
+.tl.loading .track::after{background-size:50% 100%;background-repeat:no-repeat;animation:shimmerBg 1.2s linear infinite}
+@keyframes shimmerBg{0%{background-position:-100% 0}100%{background-position:200% 0}}
