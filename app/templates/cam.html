@@ -63,11 +63,15 @@
 </div>
 
 <div class="modal" id="bellModal" hidden>
-  <div class="modalBox">
+  <div class="modalBox bellBox">
     <b>My alerts for {{ cam.name }}</b>
     <p class="muted small" id="bellNote" style="margin:6px 0 10px"></p>
     <div id="bellKinds" class="bellKinds"></div>
     <p class="small muted" id="bellVia"></p>
+    <div id="bellWho" hidden>
+      <div class="small" style="margin-top:14px"><b>Who gets alerts from this camera</b> <span class="muted tiny">admins only · ticks save straight away</span></div>
+      <div class="whoWrap"><table class="whoTbl" id="whoTbl"></table></div>
+    </div>
     <p class="err small" id="bellErr" hidden></p>
     <div class="setRow" style="margin-top:12px"><button type="button" id="bellSave" class="small">Save</button><button type="button" class="link small" id="bellReset" hidden>Use my property settings</button><span class="grow"></span><button type="button" class="secondary small" id="bellClose">Close</button></div>
   </div>

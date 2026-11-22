@@ -496,21 +496,49 @@ def _alert_kinds_for(cam):
     return [k for k in db.CAMERA_ALERT_KINDS if k != "doorbell" or is_bell]
 
 
+def _effective_alerts(person, cam_id):
+    """(kinds this person gets from this camera, whether they set them themselves)."""
+    row = db.one("SELECT kinds FROM camera_alerts WHERE person_id=? AND camera_id=?", person["id"], cam_id)
+    if row:
+        return {k for k in (row["kinds"] or "").split(",") if k}, True
+    on = {k for k in db.ALERT_KINDS if any(p["id"] == person["id"] for p in db._group_recipients(cam_id, k))}
+    if "motion" in on:
+        on |= {"person", "vehicle"}
+    return on, False
+
+
+def _alerts_target(request, me, cam_id, person_id):
+    """Whose settings a request is about: your own, or (admins only) anyone who can see the camera."""
+    if not person_id or int(person_id) == me["id"]:
+        return me
+    if not me["is_admin"]:
+        raise HTTPException(403, "You can only change your own alerts.")
+    p = db.one("SELECT * FROM people WHERE id=?", int(person_id))
+    if not p or not db.can_view(p, cam_id):
+        raise HTTPException(404, "That person can't see this camera.")
+    return p
+
+
 @app.get("/cam/{cam_id}/alerts.json")
 def cam_alerts_get(request: Request, cam_id: int):
     me = require(request)
     if not db.can_view(me, cam_id):
         raise HTTPException(404)
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
-    row = db.one("SELECT kinds FROM camera_alerts WHERE person_id=? AND camera_id=?", me["id"], cam_id)
-    if row:
-        on, custom = set((row["kinds"] or "").split(",")), True
-    else:   # what the groups give this person today, shown as the starting point
-        on, custom = {k for k in db.ALERT_KINDS if any(p["id"] == me["id"] for p in db._group_recipients(cam_id, k))}, False
-        if "motion" in on:
-            on |= {"person", "vehicle"}
-    return {"custom": custom, "via": me["alert_via"] or "text", "hasEmail": bool(me["email"]), "hasPhone": bool(me["phone"]),
-            "kinds": [{"kind": k, "label": ALERT_KIND_LABELS[k][0], "help": ALERT_KIND_LABELS[k][1], "on": k in on} for k in _alert_kinds_for(cam)]}
+    kinds = _alert_kinds_for(cam)
+    on, custom = _effective_alerts(me, cam_id)
+    out = {"custom": custom, "via": me["alert_via"] or "text", "hasEmail": bool(me["email"]), "hasPhone": bool(me["phone"]),
+           "kinds": [{"kind": k, "label": ALERT_KIND_LABELS[k][0], "help": ALERT_KIND_LABELS[k][1], "on": k in on} for k in kinds]}
+    if me["is_admin"]:      # who gets what from this camera
+        who = []
+        for p in db.q("SELECT * FROM people ORDER BY name"):
+            if not db.can_view(p, cam_id):
+                continue
+            pon, pc = _effective_alerts(p, cam_id)
+            who.append({"id": p["id"], "name": p["name"], "me": p["id"] == me["id"], "custom": pc, "via": p["alert_via"] or "text",
+                        "on": [k for k in kinds if k in pon]})
+        out["who"] = who
+    return out
 
 
 @app.post("/cam/{cam_id}/alerts")
@@ -519,12 +547,15 @@ async def cam_alerts_set(request: Request, cam_id: int):
     if not db.can_view(me, cam_id):
         raise HTTPException(404)
     form = await request.form()
+    who = _alerts_target(request, me, cam_id, form.get("person_id"))
     if form.get("reset"):
-        db.run("DELETE FROM camera_alerts WHERE person_id=? AND camera_id=?", me["id"], cam_id)
-        return {"ok": True}
-    kinds = [k for k in db.CAMERA_ALERT_KINDS if k in form.getlist("kind")]
-    db.run("INSERT INTO camera_alerts(person_id,camera_id,kinds) VALUES(?,?,?) ON CONFLICT(person_id,camera_id) DO UPDATE SET kinds=excluded.kinds",
-           me["id"], cam_id, ",".join(kinds))
+        db.run("DELETE FROM camera_alerts WHERE person_id=? AND camera_id=?", who["id"], cam_id)
+    else:
+        kinds = [k for k in db.CAMERA_ALERT_KINDS if k in form.getlist("kind")]
+        db.run("INSERT INTO camera_alerts(person_id,camera_id,kinds) VALUES(?,?,?) ON CONFLICT(person_id,camera_id) DO UPDATE SET kinds=excluded.kinds",
+               who["id"], cam_id, ",".join(kinds))
+    if who["id"] != me["id"]:
+        log.info("alerts for %s on cam%s set by %s", who["name"], cam_id, me["name"])
     return {"ok": True}
 
 

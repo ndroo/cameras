@@ -501,3 +501,8 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 .bellKinds{display:flex;flex-direction:column;gap:8px}.bellK{align-items:flex-start;font-size:14px}.bellK input{margin-top:3px}
 .viaRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.viaRow label{display:inline-flex;align-items:center;gap:4px}.viaRow input{width:auto;margin:0}
 .custList{margin:4px 0 0;padding-left:18px}
+.bellBox{width:560px;max-width:100%;max-height:88vh;overflow:auto}
+.whoWrap{overflow-x:auto;margin-top:6px}.whoTbl{border-collapse:collapse;font-size:13px;width:100%}
+.whoTbl th{font-weight:600;font-size:11px;color:var(--muted);padding:4px 5px;text-align:center}
+.whoTbl td{padding:5px;border-top:1px solid var(--line);text-align:center}.whoTbl td:first-child{text-align:left;white-space:nowrap}
+.whoTbl input{width:auto;margin:0}
