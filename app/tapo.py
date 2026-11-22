@@ -492,10 +492,18 @@ def sd_status(cloud, device_id):
 
 
 def ptz_supported(cloud, device_id):
-    """True when the camera has a pan/tilt motor. Fixed cameras (C100, doorbell) answer
-    getPresetConfig with -40101; the C210 returns its preset list (possibly empty)."""
+    """True when the camera has a pan/tilt motor, False when it definitely has none, None when
+    the answer was inconclusive (ask again later). Fixed cameras (C100, doorbell) answer
+    getPresetConfig with -40101; pan/tilt ones (C210, C500) return their preset list (possibly empty).
+    Anything else (no reply, a busy/timeout code) is not proof either way."""
     r = device_call(cloud, device_id, [{"method": "getPresetConfig", "params": {"preset": {"name": ["preset"]}}}])
-    return bool(r) and r[0].get("error_code", -1) == 0
+    code = r[0].get("error_code", -1) if r else None
+    if code == 0:
+        return True
+    if code == -40101:
+        return False
+    log.info("ptz probe %s: inconclusive (%s)", device_id[:8], code)
+    return None
 
 
 def ptz_move(cloud, device_id, x, y):

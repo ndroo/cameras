@@ -80,6 +80,12 @@ def conn():
                     _conn.execute(m)
             except sqlite3.OperationalError:
                 pass  # already applied
+        # One-time: early probes saved any hiccup as "no motor" (Porch, a C500, got stuck at 0).
+        # Clear those so the health check asks again; fixed cameras settle back to 0 on -40101.
+        with _conn:
+            if not _conn.execute("SELECT 1 FROM kv WHERE k='ptz:reprobe1'").fetchone():
+                _conn.execute("UPDATE cameras SET ptz=NULL WHERE ptz=0")
+                _conn.execute("INSERT INTO kv(k,v) VALUES('ptz:reprobe1','1')")
     return _conn
 
 
