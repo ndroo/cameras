@@ -26,6 +26,7 @@
   <div class="controls">
     <button type="button" class="pill live" id="modeBtn" title="Back to live"><i></i><span id="modeTxt">LIVE</span></button>
     <span class="chip" id="label" hidden></span>
+    <span class="seekBtns" id="seekBtns"><button type="button" data-seek="prev" title="Previous detection">⏮</button><button type="button" data-seek="-10" title="Back 10 seconds">−10s</button><button type="button" data-seek="10" title="Forward 10 seconds">+10s</button><button type="button" data-seek="next" title="Next detection">⏭</button></span>
     <select id="speed" class="chip speed" title="Playback speed" hidden><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
     <button type="button" class="pill garage" id="garageBtn" title="Open / close the garage door" hidden><span class="gic">🚪</span><span id="garageTxt">Garage</span></button>
     <span class="grow"></span>
@@ -55,10 +56,16 @@
 </div>
 
 <div class="card tl" id="tl">
-  <div class="dayNav">
-    <button type="button" class="nav" id="dayPrev" title="Earlier day">‹</button>
-    <button type="button" class="dayBtn" id="dayBtn" title="Pick a day"><b id="dayTitle"></b> <span class="muted small" id="daySub"></span> <span class="caret">📅</span></button>
-    <button type="button" class="nav" id="dayNext" title="Later day">›</button>
+  <div class="tlTop">
+    <div class="seg3" id="rangeSel" role="tablist" aria-label="Time range">
+      <button type="button" data-range="day">Day</button><button type="button" data-range="24h">24 h</button><button type="button" data-range="7d">7 days</button><button type="button" data-range="30d">30 days</button>
+    </div>
+    <div class="dayNav" id="dayNav">
+      <button type="button" class="nav" id="dayPrev" title="Earlier day">‹</button>
+      <button type="button" class="dayBtn" id="dayBtn" title="Pick a day"><b id="dayTitle"></b> <span class="muted small" id="daySub"></span> <span class="caret">📅</span></button>
+      <button type="button" class="nav" id="dayNext" title="Later day">›</button>
+    </div>
+    <div class="rangeTitle" id="rangeTitle" hidden></div>
   </div>
   <div class="modal" id="calModal" hidden>
     <div class="modalBox">
@@ -69,24 +76,41 @@
     </div>
   </div>
   <div class="tlTime"><span id="tlTime"></span><span class="grow"></span>
-    <button type="button" class="tool" id="zoomReset" hidden title="Show the whole day">⟲ <span>Whole day</span></button>
-    <button type="button" class="tool" id="cutBtn" title="Download a section">✂ <span>Section</span></button></div>
-  <div class="track" id="track24"><div class="segs"></div><div class="sel"></div><div class="ticks"></div><div class="marks"></div><div class="now"></div><div class="head"></div></div>
-  <div class="cutPanel" id="cutPanel" hidden>
-    <span class="small"><b>Download a section.</b> Drag across the bar, or scrub and use the buttons.</span>
-    <div class="cutRow">
-      <button type="button" class="secondary small" id="cutStart">Start here</button><span id="cutStartT" class="small">–</span>
-      <button type="button" class="secondary small" id="cutEnd">End here</button><span id="cutEndT" class="small">–</span>
-      <a class="btn primary" id="cutGo" href="#" hidden>Download selection</a>
-      <button type="button" class="link small" id="cutCancel">Cancel</button>
-      <span class="small muted" id="cutNote"></span>
-    </div>
+    <button type="button" class="tool" id="cutBtn" title="Select a stretch to download">⬇ <span>Download</span></button></div>
+  <div class="zoomRow" id="zoomRow">
+    <button type="button" class="tool" id="panL" title="Earlier">‹</button>
+    <span class="zoomBtns" id="zoomBtns"><button type="button" class="tool" data-z="all">All</button><button type="button" class="tool" data-z="21600">6 h</button><button type="button" class="tool" data-z="3600">1 h</button><button type="button" class="tool" data-z="900">15 m</button><button type="button" class="tool" data-z="300">5 m</button></span>
+    <button type="button" class="tool" id="panR" title="Later">›</button>
   </div>
+  <div class="track" id="track24"><div class="days"></div><div class="segs"></div><div class="sel"></div><div class="ticks"></div><div class="marks"></div><div class="now"></div><div class="head"></div><div class="bubble" hidden></div></div>
+  <div class="mini" id="mini" hidden><div class="segs"></div><div class="win"></div></div>
+  <div class="cutPanel" id="cutPanel" hidden>
+    <div class="small"><b>Download a stretch.</b> Drag across the bar to select, then fine-tune.</div>
+    <div class="cutGrid">
+      <span class="cutLbl">Start</span>
+      <span class="nudge"><button type="button" data-n="a,-60">−1m</button><button type="button" data-n="a,-10">−10s</button></span>
+      <b id="cutStartT">–</b>
+      <span class="nudge"><button type="button" data-n="a,10">+10s</button><button type="button" data-n="a,60">+1m</button></span>
+      <button type="button" class="link small" id="cutStart">set to playhead</button>
+      <span class="cutLbl">End</span>
+      <span class="nudge"><button type="button" data-n="b,-60">−1m</button><button type="button" data-n="b,-10">−10s</button></span>
+      <b id="cutEndT">–</b>
+      <span class="nudge"><button type="button" data-n="b,10">+10s</button><button type="button" data-n="b,60">+1m</button></span>
+      <button type="button" class="link small" id="cutEnd">set to playhead</button>
+    </div>
+    <div class="cutRow">
+      <button type="button" class="primary small" id="cutGo" hidden>Save download</button>
+      <button type="button" class="secondary small" id="cutZoom" hidden>Zoom to selection</button>
+      <button type="button" class="link small" id="cutCancel">Cancel</button>
+    </div>
+    <div class="small muted" id="cutNote"></div>
+  </div>
+  <div class="dlList" id="dlList" hidden><div class="small"><b>Downloads</b> <span class="muted tiny" id="dlHint"></span></div><ul id="dlItems"></ul></div>
   <div class="small tlStatus" id="status"></div>
   <div class="tlLoading" id="tlLoading" hidden><i class="spin"></i><span>Reading the card…</span></div>
-  <div class="muted tiny tlHelp">Drag to scrub · pinch or scroll on the bar to zoom · drag to the right edge for live.</div>
+  <div class="muted tiny tlHelp">Drag to scrub · scroll or pinch on the bar to zoom · tap a coloured marker's row in the list to jump there.</div>
   <div class="legend" id="legend"></div>
-  <details class="evWrap" id="evWrap"><summary class="small"><span id="evTitle">Detections</span></summary><ul class="events evList" id="evList"></ul></details>
+  <details class="evWrap" id="evWrap" open><summary class="small"><span id="evTitle">Detections</span></summary><ul class="events evList" id="evList"></ul></details>
   <div class="muted tiny cardInfo" id="cardInfo">Footage comes straight from the card, so playback takes a few seconds to start.</div>
 </div>
 

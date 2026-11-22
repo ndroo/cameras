@@ -476,9 +476,9 @@ def detections_of_day(cloud, device_id, day_start, day_end):
             labels, bits = describe_detection(d)
             out.append({"start": int(d["start_time"]), "end": int(d.get("end_time", d["start_time"])), "labels": labels,
                         "alarm_type": d.get("alarm_type"), "bits": bits})
-        total = int(pb.get("total_num", len(out)))
+        # total_num is only the size of this page, not the overall count: keep going until a page comes back short
         idx += len(items)
-        if not items or idx >= total:
+        if len(items) < 200 or idx > 20000:
             break
     out.sort(key=lambda e: e["start"])
     return out

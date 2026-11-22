@@ -7,7 +7,7 @@ and grants its members some or all of that house's cameras plus the text alerts 
 has turned on (doorbell, tamper, offline/online).  Live video comes through the Tapo
 cloud relay into go2rtc (one exec pipe per camera) and is proxied to the browser.
 """
-import asyncio, hashlib, json, logging, os, random, re, secrets, socket, subprocess, sys, tempfile, threading, time, uuid
+import asyncio, hashlib, json, logging, os, random, re, secrets, shutil, socket, subprocess, sys, tempfile, threading, time, uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -870,6 +870,7 @@ def _rtsp_open(cam_id):
 
 # ------------------------------------------------------------------ recordings (SD card)
 MAX_CLIP_SECONDS = int(os.environ.get("MAX_CLIP_SECONDS", "900"))
+CLIP_CACHE_SECS = int(os.environ.get("CLIP_CACHE_SECS", str(6 * 3600)))
 MAX_DOWNLOAD_SECONDS = int(os.environ.get("MAX_DOWNLOAD_SECONDS", "10800"))
 # One card playback per camera at a time. A new request from the same person (scrubbing
 # makes the browser drop the old request) or after 20 s without data takes over: the old
@@ -886,7 +887,7 @@ def playback_reaper():
     while True:
         time.sleep(10)
         with _playback_guard:
-            stale = [(cid, p) for cid, p in _playback.items() if time.time() - p["at"] > 30]
+            stale = [(cid, p) for cid, p in _playback.items() if not p.get("job") and time.time() - p["at"] > 30]
         for cid, p in stale:
             log.info("ending idle playback on cam%s", cid)
             try: p["ff"] and p["ff"].kill()
@@ -942,19 +943,35 @@ async def recordings_json(request: Request, cam_id: int, date: str = "", month: 
         if month:
             return {"dates": await loop.run_in_executor(None, _month_dates, cam, month)}
         ds, de = _day_bounds(date)
-        try:
-            clips = await loop.run_in_executor(None, _clips_for_day, cam, date, ds)
-        except tapo.NoCard:
-            return {"date": date, "clips": [], "events": [], "dayStart": ds, "dayEnd": de, "privacy": [], "nocard": True}
-        try:
-            events = await loop.run_in_executor(None, tapo.detections_of_day, cloud, cam["device_id"], ds, de)
-        except Exception as e:
-            log.info("detections cam%s: %s", cam_id, e); events = []
+        cached = db.one("SELECT * FROM clip_cache WHERE camera_id=? AND date=?", cam_id, date)
+        stale = False
+        # a finished day only changes when the card overwrites its oldest footage: reuse it for a while
+        if cached and de < cached["at"] and time.time() - cached["at"] < CLIP_CACHE_SECS and not request.query_params.get("fresh"):
+            clips, events = json.loads(cached["clips"]), json.loads(cached["events"])
+        else:
+            try:
+                clips = await loop.run_in_executor(None, _clips_for_day, cam, date, ds)
+            except tapo.NoCard:
+                return {"date": date, "clips": [], "events": [], "dayStart": ds, "dayEnd": de, "privacy": [], "nocard": True}
+            except Exception as e:
+                if not cached:
+                    raise
+                # card busy (a download, someone else's playback): show what we knew rather than nothing
+                log.info("recordings cam%s %s: %s; serving cached list", cam_id, date, e)
+                clips, events, stale = json.loads(cached["clips"]), json.loads(cached["events"]), cached["at"]
+            if not stale:
+                try:
+                    events = await loop.run_in_executor(None, tapo.detections_of_day, cloud, cam["device_id"], ds, de)
+                except Exception as e:
+                    log.info("detections cam%s: %s", cam_id, e)
+                    events = json.loads(cached["events"]) if cached else []
+                db.run("INSERT INTO clip_cache(camera_id,date,clips,events,at) VALUES(?,?,?,?,?) ON CONFLICT(camera_id,date) DO UPDATE SET "
+                       "clips=excluded.clips, events=excluded.events, at=excluded.at", cam_id, date, json.dumps(clips), json.dumps(events), time.time())
         wins = db.privacy_windows(cam_id, ds, de)
         clips = _minus_windows(clips, wins)
         events = [e for e in events if not db.in_privacy(wins, e["start"])]
         out = {"date": date, "clips": clips, "events": events, "dayStart": ds, "dayEnd": de,
-               "privacy": [[int(a), int(min(b, time.time()))] for a, b in wins]}
+               "privacy": [[int(a), int(min(b, time.time()))] for a, b in wins], "stale": stale}
         if request.query_params.get("sd"):
             try:
                 out["sd"] = await loop.run_in_executor(None, tapo.sd_status, cloud, cam["device_id"])
@@ -983,6 +1000,9 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     mine = {"person": me["id"], "ff": None, "at": time.time(), "done": threading.Event()}
     with _playback_guard:
         cur = _playback.get(cam_id)
+        if cur and cur.get("job"):
+            j = cur["job"]
+            raise HTTPException(409, f"This camera is busy saving a download ({j['pct']}% done). Playback works again when it finishes.")
         if cur and cur["person"] != me["id"] and time.time() - cur["at"] < 20:
             raise HTTPException(409, "Someone is already playing back from this camera. Try again in a moment.")
         _playback[cam_id] = mine
@@ -1056,6 +1076,309 @@ async def clip_mp4(request: Request, cam_id: int, start: int, end: int, download
     if download:
         headers["Content-Disposition"] = f'attachment; filename="{name}"'
     return StreamingResponse(body(), media_type="video/mp4", headers=headers)
+
+
+# ------------------------------------------------------------------ downloads (saved on the server, then fetched)
+# Streaming a long stretch straight to the browser tied the card up for the whole range
+# (the camera keeps uploading in "download" mode even after you cancel), gave no progress,
+# and a dropped connection meant starting over. Now the server saves the footage in short
+# pieces (each one stopped properly, retried if the card is busy), and the person
+# downloads a finished file that resumes. Files go as soon as they've been fetched in full
+# (after a short grace) or an hour after they were ready; a job only starts if it fits in
+# the disk's free space with room to spare.
+DL_DIR = os.path.join(DATA_DIR, "downloads")
+DL_PIECE = int(os.environ.get("DOWNLOAD_PIECE_SECONDS", "300"))
+DL_KEEP = int(os.environ.get("DOWNLOAD_KEEP_SECONDS", "3600"))
+DL_GRACE = 300                      # after the last byte went out, in case the browser retries
+DL_RESERVE = int(os.environ.get("DOWNLOAD_RESERVE_MB", "250")) * 1_000_000
+DL_BYTES_PER_SEC = 170_000           # ~19 MB per 2 min of 2K from the card, plus a margin
+DL_MAX_ACTIVE = 2
+_jobs = {}                           # id -> job dict
+_jobs_lock = threading.Lock()
+
+
+def _dl_free():
+    return shutil.disk_usage(DATA_DIR).free
+
+
+def _dl_reserved():
+    """Bytes promised to jobs that are still saving (what they may yet write)."""
+    with _jobs_lock:
+        return sum(max(0, j["estimate"] - j["bytes"]) for j in _jobs.values() if j["state"] in ("queued", "saving"))
+
+
+def _dl_capacity():
+    """Seconds of footage that could be saved right now."""
+    return max(0, int((_dl_free() - DL_RESERVE - _dl_reserved()) / DL_BYTES_PER_SEC))
+
+
+def _job_view(j):
+    return {k: j[k] for k in ("id", "cam_id", "cam_name", "start", "end", "state", "pct", "bytes", "error", "created", "ready_at", "gaps")} | {
+        "size": j.get("size"), "expires": (j["ready_at"] + DL_KEEP) if j.get("ready_at") else None, "url": f"/downloads/{j['id']}/file" if j["state"] == "ready" else None}
+
+
+def _job_pieces(j):
+    """TS bytes for the whole range, piece by piece; each piece retried while the card is busy.
+    Updates progress as it goes. Raises if a piece can't be had at all."""
+    cam = db.one("SELECT * FROM cameras WHERE id=?", j["cam_id"])
+    t = j["start"]
+    while t < j["end"]:
+        if j["cancel"].is_set():
+            return
+        a, b = t, min(j["end"], t + DL_PIECE)
+        # only ask for stretches that have footage; jump over gaps
+        clips = [c for c in j["clips"] if c["end"] > a and c["start"] < b]
+        if not clips:
+            t = b; j["done_secs"] += b - a; continue
+        a = max(a, min(c["start"] for c in clips)); b = min(b, max(c["end"] for c in clips))
+        got = False
+        for attempt in range(8):
+            if j["cancel"].is_set():
+                return
+            mode = "download" if attempt < 6 else "playback"
+            sent = 0
+            try:
+                rec = tapo.iter_recording(mq, cam["device_id"], cloud.term, a, b, mode=mode, cloud=cloud)
+                try:
+                    for chunk in rec:
+                        if j["cancel"].is_set():
+                            return
+                        sent += len(chunk)
+                        yield chunk
+                        j["at"] = time.time()
+                finally:
+                    rec.close()
+                got = True
+                break
+            except Exception as e:
+                if sent:                  # failed part-way: keep what we have, note the hole, move on
+                    log.info("download %s piece %s-%s cut short: %s", j["id"], a, b, e)
+                    j["gaps"] += 1; got = True; break
+                log.info("download %s piece %s-%s attempt %d: %s", j["id"], a, b, attempt + 1, e)
+                j["note"] = "Camera busy, retrying…"
+                time.sleep(min(15, 2 + attempt * 2))
+        if not got:
+            raise RuntimeError("The camera kept refusing that footage.")
+        j["note"] = ""
+        j["done_secs"] += min(j["end"], t + DL_PIECE) - t
+        t = min(j["end"], t + DL_PIECE)
+
+
+def _run_job(j):
+    j["state"] = "saving"; j["at"] = time.time()
+    me = {"person": j["person"], "ff": None, "at": time.time(), "done": threading.Event(), "job": j}
+    # take the card: wait for (and end) any playback in progress on this camera
+    with _playback_guard:
+        cur = _playback.get(j["cam_id"])
+        _playback[j["cam_id"]] = me
+    if cur and not cur.get("job"):
+        try: cur["ff"] and cur["ff"].kill()
+        except Exception: pass
+        cur["done"].wait(8)
+    path = os.path.join(DL_DIR, f"{j['id']}.mp4")
+    ff = None
+    try:
+        total = max(1, j["end"] - j["start"])
+
+        def progress():
+            while j["state"] == "saving":
+                try: j["bytes"] = os.path.getsize(path)
+                except OSError: pass
+                j["pct"] = min(99, int(100 * max(j["done_secs"] / total, j["bytes"] / max(1, j["estimate"]))))
+                me["at"] = time.time()
+                if _dl_free() < DL_RESERVE // 2:
+                    j["error"] = "The server ran low on disk space, so the download was stopped."; j["cancel"].set()
+                time.sleep(1)
+        threading.Thread(target=progress, daemon=True).start()
+        sp = audio.Splitter()
+        pieces = _job_pieces(j)
+        pre, rest = audio.prime(pieces, sp)
+        if not pre:
+            raise RuntimeError("No footage came back for that stretch.")
+        ff, afd = audio.start_ffmpeg(sp, ["-movflags", "+faststart", "-f", "mp4", "-y", path])
+        audio.pump(rest, ff, afd, sp, pre)
+        ff.wait(timeout=600)
+        if j["cancel"].is_set():
+            raise RuntimeError(j["error"] or "Cancelled.")
+        if ff.returncode != 0 or not os.path.exists(path):
+            raise RuntimeError("Couldn't put the video file together.")
+        j["size"] = j["bytes"] = os.path.getsize(path); j["pct"] = 100
+        j["ready_at"] = time.time(); j["state"] = "ready"
+        log.info("download %s ready: cam%s %s-%s, %d bytes, %d gaps", j["id"], j["cam_id"], j["start"], j["end"], j["size"], j["gaps"])
+    except Exception as e:
+        j["state"] = "cancelled" if (j["cancel"].is_set() and not j["error"]) else "failed"
+        j["error"] = j["error"] or str(e)[:200]; j["ended_at"] = time.time()
+        log.info("download %s %s: %s", j["id"], j["state"], e)
+        try: ff and ff.kill()
+        except Exception: pass
+        try: os.remove(path)
+        except OSError: pass
+    finally:
+        me["done"].set()
+        with _playback_guard:
+            if _playback.get(j["cam_id"]) is me:
+                del _playback[j["cam_id"]]
+        _dl_kick()
+
+
+def _dl_kick():
+    """Start queued jobs: at most DL_MAX_ACTIVE at once and one per camera."""
+    with _jobs_lock:
+        active = [j for j in _jobs.values() if j["state"] == "saving"]
+        busy = {j["cam_id"] for j in active}
+        for j in sorted(_jobs.values(), key=lambda x: x["created"]):
+            if len(active) >= DL_MAX_ACTIVE:
+                break
+            if j["state"] == "queued" and j["cam_id"] not in busy:
+                j["state"] = "saving"; active.append(j); busy.add(j["cam_id"])
+                threading.Thread(target=_run_job, args=(j,), name=f"dl-{j['id']}", daemon=True).start()
+
+
+def download_reaper():
+    os.makedirs(DL_DIR, exist_ok=True)
+    for f in os.listdir(DL_DIR):           # jobs don't survive a restart
+        try: os.remove(os.path.join(DL_DIR, f))
+        except OSError: pass
+    while True:
+        time.sleep(30)
+        now_ = time.time()
+        with _jobs_lock:
+            items = list(_jobs.values())
+        for j in items:
+            gone = False
+            if j["state"] == "ready" and ((j.get("fetched_at") and now_ - j["fetched_at"] > DL_GRACE) or now_ - j["ready_at"] > DL_KEEP):
+                try: os.remove(os.path.join(DL_DIR, f"{j['id']}.mp4"))
+                except OSError: pass
+                j["state"] = "expired"; j["ended_at"] = now_
+            if j["state"] in ("failed", "cancelled", "expired") and now_ - j.get("ended_at", now_) > DL_KEEP:
+                gone = True
+            if gone:
+                with _jobs_lock:
+                    _jobs.pop(j["id"], None)
+
+
+@app.get("/downloads.json")
+def downloads_json(request: Request):
+    me = require(request)
+    with _jobs_lock:
+        mine = [_job_view(j) | {"note": j.get("note", "")} for j in _jobs.values() if j["person"] == me["id"]]
+    mine.sort(key=lambda x: -x["created"])
+    return {"jobs": mine, "capacity": _dl_capacity(), "keep": DL_KEEP}
+
+
+@app.post("/cam/{cam_id}/downloads")
+async def download_create(request: Request, cam_id: int, start: int = Form(...), end: int = Form(...)):
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    start, end = int(start), int(min(end, time.time()))
+    if end - start < 5:
+        return JSONResponse({"ok": False, "error": "Pick at least a few seconds."}, status_code=400)
+    if end - start > MAX_DOWNLOAD_SECONDS:
+        return JSONResponse({"ok": False, "error": f"That's longer than the {MAX_DOWNLOAD_SECONDS // 3600} hour limit."}, status_code=400)
+    wins = db.privacy_windows(cam_id, start, end)
+    if wins:
+        return JSONResponse({"ok": False, "error": "That stretch includes privacy-mode time, which can't be downloaded."}, status_code=400)
+    with _jobs_lock:
+        if sum(1 for j in _jobs.values() if j["person"] == me["id"] and j["state"] in ("queued", "saving")) >= 3:
+            return JSONResponse({"ok": False, "error": "You already have 3 downloads saving. Wait for one to finish."}, status_code=429)
+    # which parts of the range have footage (from the cached day lists, else ask the card)
+    loop = asyncio.get_event_loop()
+    clips = []
+    d = datetime.fromtimestamp(start, TZ).date()
+    while d <= datetime.fromtimestamp(end, TZ).date():
+        key = d.strftime("%Y%m%d")
+        row = db.one("SELECT clips, at FROM clip_cache WHERE camera_id=? AND date=?", cam_id, key)
+        ds, de = _day_bounds(key)
+        if row and (de < row["at"] or time.time() - row["at"] < 60):
+            clips += json.loads(row["clips"])
+        else:
+            try:
+                clips += await loop.run_in_executor(None, _clips_for_day, cam, key, ds)
+            except tapo.NoCard:
+                return JSONResponse({"ok": False, "error": "This camera has no SD card."}, status_code=400)
+            except Exception:
+                clips.append({"start": max(start, ds), "end": min(end, de)})     # unknown: just ask for all of it
+        d += __import__("datetime").timedelta(days=1)
+    clips = [c for c in clips if c["end"] > start and c["start"] < end]
+    if not clips:
+        return JSONResponse({"ok": False, "error": "There's no footage on the card in that stretch."}, status_code=400)
+    secs = sum(min(end, c["end"]) - max(start, c["start"]) for c in clips)
+    estimate = int(secs * DL_BYTES_PER_SEC)
+    room = _dl_free() - DL_RESERVE - _dl_reserved()
+    if estimate > room:
+        mins = max(0, int(room / DL_BYTES_PER_SEC / 60))
+        return JSONResponse({"ok": False, "error": f"Not enough room on the server for that much footage right now. Up to about {mins} minutes fits; pick a shorter stretch or wait for other downloads to clear."}, status_code=507)
+    jid = secrets.token_urlsafe(9)
+    j = {"id": jid, "cam_id": cam_id, "cam_name": cam["name"], "person": me["id"], "start": start, "end": end, "clips": clips,
+         "state": "queued", "pct": 0, "bytes": 0, "estimate": estimate, "error": "", "note": "", "created": time.time(),
+         "ready_at": None, "done_secs": 0, "gaps": 0, "cancel": threading.Event(), "at": time.time()}
+    with _jobs_lock:
+        _jobs[jid] = j
+    _dl_kick()
+    return {"ok": True, "job": _job_view(j)}
+
+
+@app.post("/downloads/{jid}/cancel")
+def download_cancel(request: Request, jid: str):
+    me = require(request)
+    j = _jobs.get(jid)
+    if not j or j["person"] != me["id"]:
+        raise HTTPException(404)
+    if j["state"] in ("queued", "saving"):
+        j["cancel"].set()
+        if j["state"] == "queued":
+            j["state"] = "cancelled"; j["ended_at"] = time.time()
+    elif j["state"] == "ready":
+        try: os.remove(os.path.join(DL_DIR, f"{jid}.mp4"))
+        except OSError: pass
+        j["state"] = "expired"; j["ended_at"] = time.time()
+    return {"ok": True}
+
+
+@app.get("/downloads/{jid}/file")
+def download_file(request: Request, jid: str):
+    """The finished file, with byte ranges so an interrupted download resumes. Once the
+    last byte has gone out the file is marked fetched and removed a few minutes later."""
+    me = require(request)
+    j = _jobs.get(jid)
+    if not j or j["person"] != me["id"]:
+        raise HTTPException(404)
+    path = os.path.join(DL_DIR, f"{jid}.mp4")
+    if j["state"] != "ready" or not os.path.exists(path):
+        raise HTTPException(410, "That download has expired. Make it again from the timeline.")
+    size = os.path.getsize(path)
+    a, b = 0, size - 1
+    rng = request.headers.get("range", "")
+    m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip())
+    status_code = 200
+    if m and (m.group(1) or m.group(2)):
+        if m.group(1):
+            a = int(m.group(1)); b = min(size - 1, int(m.group(2))) if m.group(2) else size - 1
+        else:
+            a = max(0, size - int(m.group(2)))
+        if a > b or a >= size:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        status_code = 206
+    name = f"{j['cam_name']}-{datetime.fromtimestamp(j['start'], TZ).strftime('%Y%m%d-%H%M%S')}.mp4".replace(" ", "_")
+
+    def body():
+        with open(path, "rb") as f:
+            f.seek(a); left = b - a + 1
+            while left > 0:
+                data = f.read(min(65536, left))
+                if not data:
+                    break
+                left -= len(data)
+                yield data
+        if left == 0 and b == size - 1:
+            j["fetched_at"] = time.time()
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(b - a + 1), "Cache-Control": "no-store",
+               "Content-Disposition": f'attachment; filename="{name}"'}
+    if status_code == 206:
+        headers["Content-Range"] = f"bytes {a}-{b}/{size}"
+    return StreamingResponse(body(), status_code=status_code, media_type="video/mp4", headers=headers)
 
 
 # ------------------------------------------------------------------ events + alerts
@@ -1828,6 +2151,7 @@ async def startup():
     threading.Thread(target=backup_loop, name="backup", daemon=True).start()
     threading.Thread(target=privacy_loop, name="privacy", daemon=True).start()
     threading.Thread(target=playback_reaper, name="playback-reaper", daemon=True).start()
+    threading.Thread(target=download_reaper, name="download-reaper", daemon=True).start()
     if STREAM_SOURCE == "rtsp":
         global _rtsp
         from . import rtsp
