@@ -1272,9 +1272,11 @@ def check_camera(cam):
             record_event(cam, "online", notify=bool(cam["offline_alerted"]))
         if time.time() - (cam["sd_at"] or 0) > SD_EVERY:
             refresh_sd(cam)
-        if cam["ptz"] is None:          # first successful check: find out whether it has a motor
+        if cam["ptz"] is None:          # until a conclusive answer: find out whether it has a motor
             try:
-                db.run("UPDATE cameras SET ptz=? WHERE id=?", 1 if tapo.ptz_supported(cloud, cam["device_id"]) else 0, cam["id"])
+                has = tapo.ptz_supported(cloud, cam["device_id"])
+                if has is not None:
+                    db.run("UPDATE cameras SET ptz=? WHERE id=?", int(has), cam["id"])
             except Exception as e:
                 log.warning("ptz probe %s: %s", cam["name"], e)
     except Exception as e:
