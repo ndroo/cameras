@@ -30,12 +30,16 @@
     <span class="seekBtns" id="seekBtns"><button type="button" data-seek="prev" title="Previous detection">⏮</button><button type="button" data-seek="-10" title="Back 10 seconds">−10s</button><button type="button" data-seek="10" title="Forward 10 seconds">+10s</button><button type="button" data-seek="next" title="Next detection">⏭</button></span>
     <select id="speed" class="chip speed" title="Playback speed" hidden><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
     <button type="button" class="pill garage" id="garageBtn" title="Open / close the garage door" hidden><span class="gic">🚪</span><span id="garageTxt">Garage</span></button>
+    <select id="presetSel" class="chip" title="Go to a saved position" hidden></select>
     <span class="grow"></span>
     <span class="volWrap"><button type="button" data-act="sound" id="soundBtn" title="Sound">🔊</button><input type="range" id="vol" min="0" max="100" step="1" aria-label="Volume" title="Volume"></span>
     <button type="button" class="moreBtn" id="moreBtn" title="More controls" aria-expanded="false">⋯</button>
     <button type="button" data-act="full" title="Fullscreen">⛶</button>
     <span class="moreRow" id="moreRow">
       <button type="button" id="privBtn" title="Privacy mode" hidden>🔒</button>
+      <button type="button" id="setBtn" title="Camera settings" hidden>⚙</button>
+      <button type="button" id="lightBtn" title="Spotlight" hidden>💡</button>
+      <button type="button" id="sirenBtn" title="Siren" hidden>🚨</button>
       <button type="button" id="imgBtn" title="Day / night mode" hidden>◐</button>
       <button type="button" data-act="rotate" title="Rotate 90°">⟳</button>
       <button type="button" data-act="flip_h" title="Mirror">↔</button>
@@ -54,6 +58,25 @@
     <button type="button" id="privGo" data-busy="Turning on…">Turn on privacy</button>
     <button type="button" class="secondary small" id="privClose" style="margin-top:8px;width:100%">Cancel</button>
     <p class="err small" id="privErr" hidden></p>
+  </div>
+</div>
+
+<div class="modal" id="setModal" hidden>
+  <div class="modalBox setBox">
+    <b>Camera settings</b>
+    <div class="small muted" id="setLoading" style="margin:8px 0">Asking the camera…</div>
+    <div id="setBody" hidden>
+      <div class="setSec"><div class="small"><b>Detection</b> <span class="muted tiny">what counts as an event (and can send alerts)</span></div><div id="setDetect"></div></div>
+      <div class="setSec" id="setPosWrap" hidden><div class="small"><b>Saved positions</b> <span class="muted tiny">aim with the arrows, then save</span></div>
+        <ul class="setList" id="setPos"></ul>
+        <div class="setRow"><input id="posName" maxlength="30" placeholder="Name, e.g. Driveway"><button type="button" class="secondary small" id="posSave">Save current view</button></div></div>
+      <div class="setSec"><div class="small"><b>SD card</b></div><div class="small" id="setSd"></div>
+        <button type="button" class="secondary small danger" id="sdFormat" hidden>Format card…</button></div>
+      <div class="setSec"><div class="small"><b>Restart</b> <span class="muted tiny">offline for about a minute</span></div>
+        <button type="button" class="secondary small" id="camReboot">Restart camera…</button></div>
+    </div>
+    <p class="err small" id="setErr" hidden></p><p class="ok small" id="setOk" hidden></p>
+    <button type="button" class="secondary small" id="setClose" style="margin-top:12px;width:100%">Close</button>
   </div>
 </div>
 
