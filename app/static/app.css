@@ -485,3 +485,7 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 @media (max-width:560px){.seekBtns button[data-seek="-10"],.seekBtns button[data-seek="10"]{padding:4px 5px}}
 .tl.loading .track::after{background-size:50% 100%;background-repeat:no-repeat;animation:shimmerBg 1.2s linear infinite}
 @keyframes shimmerBg{0%{background-position:-100% 0}100%{background-position:200% 0}}
+.optList{display:flex;flex-direction:column;gap:6px}
+.optList button{margin:0;width:100%;text-align:left;padding:8px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--line);color:var(--fg);display:flex;flex-direction:column;gap:2px;font-weight:400}
+.optList button b{font-size:14px}.optList button span{font-size:12px;color:var(--muted)}
+.optList button.active{border-color:var(--acc);background:rgba(79,140,255,.14)}.optList button.busy{opacity:.6}

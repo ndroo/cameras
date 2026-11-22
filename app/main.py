@@ -482,6 +482,39 @@ def events_page(request: Request):
     return _remember_house(r, pick) if setc else r
 
 
+@app.get("/cam/{cam_id}/image.json")
+async def cam_image_get(request: Request, cam_id: int):
+    """Current day/night setting, read live from the camera (admins only)."""
+    require(request, admin=True)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404)
+    try:
+        return await asyncio.get_event_loop().run_in_executor(None, tapo.image_mode, cloud, cam["device_id"])
+    except Exception as e:
+        log.info("image mode %s: %s", cam["name"], e)
+        raise HTTPException(502, "The camera didn't answer. Try again.")
+
+
+@app.post("/cam/{cam_id}/image")
+async def cam_image_set(request: Request, cam_id: int, mode: str = Form(""), night: str = Form("")):
+    me = require(request, admin=True)
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    if not cam:
+        raise HTTPException(404)
+    if mode and mode not in ("auto", "on", "off"):
+        raise HTTPException(400, "Unknown mode")
+    if night and night not in tapo.NIGHT_VISION_MODES:
+        raise HTTPException(400, "Unknown night vision mode")
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, lambda: tapo.set_image_mode(cloud, cam["device_id"], mode or None, night or None))
+    except Exception as e:
+        log.warning("set image mode %s: %s", cam["name"], e)
+        return JSONResponse({"ok": False, "error": "The camera didn't take the change. Try again."}, status_code=502)
+    log.info("image mode %s: mode=%s night=%s by %s", cam["name"], mode, night, me["name"])
+    return {"ok": True}
+
+
 @app.post("/cam/{cam_id}/orientation")
 def cam_orientation(request: Request, cam_id: int, rotate: int = Form(0), flip_h: int = Form(0), flip_v: int = Form(0)):
     require(request, admin=True)

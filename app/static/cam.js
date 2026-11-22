@@ -126,6 +126,46 @@ if (D.canPause) {
     privacyPost(fd).catch(e => { ev.target.disabled = false; err.textContent = e.message; err.hidden = false; }); });
 }
 
+// ---------------------------------------------------------------- day / night mode (admins; read live from the camera)
+const NIGHTS = { inf_night_vision: ["Infrared", "Black & white, invisible infrared light"], md_night_vision: ["Colour when there's motion", "Spotlight comes on and the picture goes colour when something moves"],
+  wtl_night_vision: ["Full colour", "Spotlight stays on all night for a colour picture"], dbl_night_vision: ["Dual light", "Infrared, with the light coming on for motion"] };
+if (D.isAdmin) {
+  const btn = $("#imgBtn"), modal = $("#imgModal"), err = $("#imgErr");
+  btn.hidden = false;
+  let cur = null;
+  const mark = () => {
+    for (const b of $("#imgMode").children) b.classList.toggle("active", b.dataset.v === cur.mode);
+    for (const b of $("#imgNight").children) b.classList.toggle("active", b.dataset.v === cur.night);
+  };
+  async function open() {
+    modal.hidden = false; err.hidden = true; $("#imgBody").hidden = true; $("#imgLoading").hidden = false;
+    try {
+      const r = await fetch(`/cam/${D.camId}/image.json`); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "The camera didn't answer.");
+      cur = await r.json();
+      const nw = $("#imgNight"); nw.innerHTML = "";
+      for (const n of cur.nights) { const [t, d] = NIGHTS[n]; const b = document.createElement("button"); b.type = "button"; b.dataset.v = n; b.innerHTML = `<b>${t}</b><span>${d}</span>`; nw.appendChild(b); }
+      $("#imgNightWrap").hidden = cur.nights.length < 2;
+      mark(); $("#imgLoading").hidden = true; $("#imgBody").hidden = false;
+    } catch (e) { $("#imgLoading").hidden = true; err.textContent = e.message; err.hidden = false; }
+  }
+  async function set(field, v, b) {
+    if (cur[field] === v) return;
+    b.classList.add("busy"); err.hidden = true;
+    const fd = new FormData(); fd.set(field, v);
+    try {
+      const r = await fetch(`/cam/${D.camId}/image`, { method: "POST", body: fd }), j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || j.detail || "The camera didn't take the change.");
+      cur[field] = v; mark();
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+    finally { b.classList.remove("busy"); }
+  }
+  btn.addEventListener("click", open);
+  $("#imgMode").addEventListener("click", ev => { const b = ev.target.closest("button[data-v]"); if (b && cur) set("mode", b.dataset.v, b); });
+  $("#imgNight").addEventListener("click", ev => { const b = ev.target.closest("button[data-v]"); if (b && cur) set("night", b.dataset.v, b); });
+  $("#imgClose").addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", ev => { if (ev.target === modal) modal.hidden = true; });
+}
+
 // ---------------------------------------------------------------- card footage source
 // iPhones only play a plain <video src> from servers that answer byte-range requests,
 // and card footage is made on the fly (no length), so there it never played. Where the
