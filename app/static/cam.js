@@ -266,6 +266,43 @@ if (D.isAdmin) {
   window.__drawPresets = drawPresets;
 }
 
+// ---------------------------------------------------------------- my alerts for this camera (everyone who can see it)
+{
+  const modal = $("#bellModal"), err = $("#bellErr"), box = $("#bellKinds");
+  let cur = null;
+  async function open() {
+    modal.hidden = false; err.hidden = true; box.innerHTML = '<span class="muted small">Loading…</span>';
+    try {
+      cur = await (await fetch(`/cam/${D.camId}/alerts.json`)).json();
+      box.innerHTML = "";
+      for (const k of cur.kinds) {
+        const l = document.createElement("label"); l.className = "tog bellK";
+        l.innerHTML = `<input type="checkbox" value="${k.kind}" ${k.on ? "checked" : ""}> <span><b>${k.label}</b>${k.help ? ` <span class="muted tiny">${k.help}</span>` : ""}</span>`;
+        box.appendChild(l);
+      }
+      $("#bellNote").textContent = cur.custom ? "You've set these yourself for this camera." : "Right now this camera follows your property settings (shown ticked). Saving here sets this camera on its own.";
+      $("#bellReset").hidden = !cur.custom;
+      $("#bellVia").innerHTML = `Sent by ${cur.via === "both" ? "text and email" : cur.via}. <a href="/account#alerts">Change</a>`;
+    } catch { err.textContent = "Couldn't load your alert settings."; err.hidden = false; }
+  }
+  async function post(fd) {
+    const r = await fetch(`/cam/${D.camId}/alerts`, { method: "POST", body: fd });
+    if (!r.ok) throw new Error("Couldn't save.");
+  }
+  $("#bellBtn").addEventListener("click", open);
+  $("#bellClose").addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", ev => { if (ev.target === modal) modal.hidden = true; });
+  $("#bellSave").addEventListener("click", async ev => {
+    const fd = new FormData(); for (const c of box.querySelectorAll("input:checked")) fd.append("kind", c.value);
+    ev.target.disabled = true;
+    try { await post(fd); modal.hidden = true; status.textContent = "Alerts for this camera saved."; } catch (e) { err.textContent = e.message; err.hidden = false; } finally { ev.target.disabled = false; }
+  });
+  $("#bellReset").addEventListener("click", async () => {
+    const fd = new FormData(); fd.set("reset", "1");
+    try { await post(fd); await open(); } catch (e) { err.textContent = e.message; err.hidden = false; }
+  });
+}
+
 // ---------------------------------------------------------------- card footage source
 // iPhones only play a plain <video src> from servers that answer byte-range requests,
 // and card footage is made on the fly (no length), so there it never played. Where the

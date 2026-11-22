@@ -498,3 +498,6 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 .danger{color:var(--bad)}.ok{color:var(--ok,#34c759)}
 .controls button.alarm{background:var(--bad);color:#fff;animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.6}}
+.bellKinds{display:flex;flex-direction:column;gap:8px}.bellK{align-items:flex-start;font-size:14px}.bellK input{margin-top:3px}
+.viaRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.viaRow label{display:inline-flex;align-items:center;gap:4px}.viaRow input{width:auto;margin:0}
+.custList{margin:4px 0 0;padding-left:18px}

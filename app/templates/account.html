@@ -10,10 +10,20 @@
 {% if msg %}<p class="notice">{{ msg }}</p>{% endif %}{% if err %}<p class="notice errBox">{{ err }}</p>{% endif %}
 
 <div class="acctGrid">
-  <section class="card acctAlerts">
-    <h2>Text alerts</h2>
+  <section class="card acctAlerts" id="alerts">
+    <h2>Alerts</h2>
+    <form method="post" action="/account/alert-via" class="viaRow">
+      <span class="small">Send alerts by</span>
+      {% for v, l in [('text', 'Text'), ('email', 'Email'), ('both', 'Both')] %}<label class="small"><input type="radio" name="via" value="{{ v }}" {% if (me.alert_via or 'text') == v %}checked{% endif %} {% if v != 'text' and not me.email %}disabled{% endif %} onchange="this.form.submit()"> {{ l }}</label>{% endfor %}
+      {% if not me.email %}<span class="muted tiny">Add an email to your account to get alerts by email.</span>{% endif %}
+    </form>
+    {% if custom_alerts %}
+    <p class="small" style="margin-top:12px"><b>Cameras you've set yourself</b> <span class="muted">(these replace the property settings below for that camera; change them with 🔔 on the camera)</span></p>
+    <ul class="small custList">{% for c in custom_alerts %}<li><a href="/cam/{{ c.camera_id }}">{{ c.name }}</a> <span class="muted">· {{ c.labels }}</span></li>{% endfor %}</ul>
+    {% endif %}
+    <p class="small" style="margin-top:12px"><b>By property</b></p>
     {% if alert_groups %}
-    <p class="muted small">What your groups text you about. Untick anything you'd rather not get.</p>
+    <p class="muted small">What your groups alert you about. Untick anything you'd rather not get. For one camera at a time, use 🔔 on that camera's page.</p>
     <form method="post" action="/account/alerts">
       <table class="agrid">
         <thead><tr><th></th>{% for g in alert_groups %}<th><b>{{ g.house }}</b>{% if alert_groups|selectattr('house', 'equalto', g.house)|list|length > 1 %}<span class="muted">{{ g.name }}</span>{% endif %}</th>{% endfor %}</tr></thead>
@@ -24,10 +34,10 @@
         {% endfor %}
         </tbody>
       </table>
-      <button type="submit" class="small" data-busy="Saving…">Save text alerts</button>
+      <button type="submit" class="small" data-busy="Saving…">Save property alerts</button>
     </form>
     {% else %}
-    <p class="muted small">None of your groups send texts, so there's nothing to set here.</p>
+    <p class="muted small">None of your groups send alerts. You can still turn them on for a camera with 🔔 on its page.</p>
     {% endif %}
   </section>
 

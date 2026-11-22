@@ -33,6 +33,7 @@
     <select id="presetSel" class="chip" title="Go to a saved position" hidden></select>
     <span class="grow"></span>
     <span class="volWrap"><button type="button" data-act="sound" id="soundBtn" title="Sound">🔊</button><input type="range" id="vol" min="0" max="100" step="1" aria-label="Volume" title="Volume"></span>
+    <button type="button" id="bellBtn" title="My alerts for this camera">🔔</button>
     <button type="button" class="moreBtn" id="moreBtn" title="More controls" aria-expanded="false">⋯</button>
     <button type="button" data-act="full" title="Fullscreen">⛶</button>
     <span class="moreRow" id="moreRow">
@@ -58,6 +59,17 @@
     <button type="button" id="privGo" data-busy="Turning on…">Turn on privacy</button>
     <button type="button" class="secondary small" id="privClose" style="margin-top:8px;width:100%">Cancel</button>
     <p class="err small" id="privErr" hidden></p>
+  </div>
+</div>
+
+<div class="modal" id="bellModal" hidden>
+  <div class="modalBox">
+    <b>My alerts for {{ cam.name }}</b>
+    <p class="muted small" id="bellNote" style="margin:6px 0 10px"></p>
+    <div id="bellKinds" class="bellKinds"></div>
+    <p class="small muted" id="bellVia"></p>
+    <p class="err small" id="bellErr" hidden></p>
+    <div class="setRow" style="margin-top:12px"><button type="button" id="bellSave" class="small">Save</button><button type="button" class="link small" id="bellReset" hidden>Use my property settings</button><span class="grow"></span><button type="button" class="secondary small" id="bellClose">Close</button></div>
   </div>
 </div>
 

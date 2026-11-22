@@ -50,6 +50,9 @@ MIGRATIONS = [
     "ALTER TABLE cameras ADD COLUMN offline_alerted INTEGER DEFAULT 0",   # 1 once the offline text went out
     "ALTER TABLE cameras ADD COLUMN sd TEXT",       # JSON card summary {state, total, free, oldest, loop}; NULL until checked
     "ALTER TABLE cameras ADD COLUMN sd_at REAL",    # when the card was last checked
+    # per-person, per-camera alert choices; a row replaces that person's group rules for that camera
+    "CREATE TABLE IF NOT EXISTS camera_alerts (person_id INTEGER REFERENCES people(id) ON DELETE CASCADE, camera_id INTEGER REFERENCES cameras(id) ON DELETE CASCADE, kinds TEXT DEFAULT '', PRIMARY KEY (person_id, camera_id))",
+    "ALTER TABLE people ADD COLUMN alert_via TEXT DEFAULT 'text'",   # text | email | both
     # footage lists per camera per day, so past days and multi-day views don't ask the card every time
     "CREATE TABLE IF NOT EXISTS clip_cache (camera_id INTEGER, date TEXT, clips TEXT, events TEXT, at REAL, PRIMARY KEY (camera_id, date))",
     "CREATE TABLE IF NOT EXISTS garage_openers (id INTEGER PRIMARY KEY, house_id INTEGER REFERENCES houses(id) ON DELETE CASCADE, camera_id INTEGER REFERENCES cameras(id) ON DELETE SET NULL, name TEXT NOT NULL, backend TEXT DEFAULT 'shelly', host TEXT, auth TEXT, relay INTEGER DEFAULT 0, pulse REAL DEFAULT 0.5, state_input INTEGER, state_invert INTEGER DEFAULT 0, created REAL)",
@@ -137,9 +140,37 @@ def can_view(person, camera_id):
     return any(c["id"] == camera_id for c in person_cameras(person))
 
 
-def recipients_for(camera_id, kind):
-    """People to text for an event on this camera: members of groups that cover the
-    camera and have the matching notify flag, minus members who muted that kind."""
+# what a person can pick per camera; "motion" means any movement at all
+CAMERA_ALERT_KINDS = ("doorbell", "person", "vehicle", "motion", "tamper", "offline")
+
+
+def event_tags(kind, labels=()):
+    """The per-camera choices an event satisfies: a 'motion, person, vehicle' detection
+    matches anyone who picked people, vehicles or any motion."""
+    base = "offline" if kind == "online" else kind
+    tags = {base}
+    if base == "motion" or labels:
+        tags.add("motion")
+    for l in labels:
+        if l == "person": tags.add("person")
+        if l == "vehicle": tags.add("vehicle")
+    if base == "doorbell":
+        tags.discard("motion")
+    return tags
+
+
+def recipients_for(camera_id, kind, labels=()):
+    """People to alert for an event on this camera. Someone who has set choices for this
+    camera gets it when the event matches them (and they can still see the camera);
+    everyone else falls back to their groups' rules."""
+    tags = event_tags(kind, labels)
+    custom = q("SELECT p.*, ca.kinds AS ca_kinds FROM camera_alerts ca JOIN people p ON p.id=ca.person_id WHERE ca.camera_id=?", camera_id)
+    out = [p for p in custom if tags & set((p["ca_kinds"] or "").split(",")) and can_view(p, camera_id)]
+    skip = {p["id"] for p in custom}
+    return out + [p for p in _group_recipients(camera_id, kind) if p["id"] not in skip]
+
+
+def _group_recipients(camera_id, kind):
     base = "offline" if kind == "online" else kind
     if base not in ALERT_KINDS:
         return []
