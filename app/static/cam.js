@@ -315,6 +315,16 @@ if (D.ptz) {
   for (const t of ["pointerup", "pointercancel", "pointerleave"]) ptz.addEventListener(t, stop);
   window.addEventListener("blur", stop);
   ptz.addEventListener("contextmenu", ev => ev.preventDefault());
+  $("#caliBtn").addEventListener("click", async () => {
+    if (ptz.classList.contains("calibrating")) return;
+    if (!confirm("Calibrate this camera? It will sweep through its whole pan and tilt range (about 30 seconds) to re-find its position, then come back.")) return;
+    ptz.classList.add("calibrating"); status.textContent = "Calibrating: the camera is sweeping its range…";
+    try {
+      const r = await fetch(`/cam/${D.camId}/calibrate`, { method: "POST" }), j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || "Calibration failed.");
+      setTimeout(() => { ptz.classList.remove("calibrating"); status.textContent = "Calibrated. Use the arrows to aim it if needed."; }, 30000);
+    } catch (e) { ptz.classList.remove("calibrating"); status.textContent = e.message; }
+  });
 }
 
 // ---------------------------------------------------------------- timeline (one zoomable day bar)

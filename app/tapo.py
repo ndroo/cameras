@@ -514,6 +514,15 @@ def ptz_move(cloud, device_id, x, y):
         raise RuntimeError(f"motor error {code}")
 
 
+def ptz_calibrate(cloud, device_id):
+    """The Tapo app's "Calibrate": the camera sweeps its full pan/tilt range to re-find its
+    end stops (fixes a view that drifted or got knocked), then returns to its position."""
+    r = device_call(cloud, device_id, [{"method": "manualCalibrate", "params": {"motor": {"manual_cali": "null"}}}], timeout=30)
+    code = r[0].get("error_code", -1) if r else -1
+    if code != 0:
+        raise RuntimeError(f"calibrate error {code}")
+
+
 def _client_part(obj, session_id=None):
     data = json.dumps(obj, separators=(",", ":")).encode()
     extra = f"X-Session-Id: {session_id}\r\n".encode() if session_id else b""
