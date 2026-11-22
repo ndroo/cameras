@@ -283,7 +283,30 @@ if (D.isAdmin) {
       $("#bellNote").textContent = cur.custom ? "You've set these yourself for this camera." : "Right now this camera follows your property settings (shown ticked). Saving here sets this camera on its own.";
       $("#bellReset").hidden = !cur.custom;
       $("#bellVia").innerHTML = `Sent by ${cur.via === "both" ? "text and email" : cur.via}. <a href="/account#alerts">Change</a>`;
+      drawWho();
     } catch { err.textContent = "Couldn't load your alert settings."; err.hidden = false; }
+  }
+  function drawWho() {
+    const wrap = $("#bellWho"); wrap.hidden = !cur.who; if (!cur.who) return;
+    const short = { doorbell: "Bell", person: "People", vehicle: "Vehicles", motion: "Motion", tamper: "Tamper", offline: "Offline" };
+    const t = $("#whoTbl");
+    t.innerHTML = `<thead><tr><th></th>${cur.kinds.map(k => `<th title="${k.label}">${short[k.kind]}</th>`).join("")}<th></th></tr></thead>`;
+    const tb = document.createElement("tbody");
+    for (const p of cur.who) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><b></b><span class="muted tiny"> ${p.custom ? "own choice" : "property"} · ${p.via === "both" ? "text+email" : p.via}</span></td>` +
+        cur.kinds.map(k => `<td><input type="checkbox" value="${k.kind}" ${p.on.includes(k.kind) ? "checked" : ""} aria-label="${k.label}"></td>`).join("") +
+        `<td>${p.custom ? `<button type="button" class="link tiny" data-reset>reset</button>` : ""}</td>`;
+      tr.querySelector("b").textContent = p.me ? `${p.name} (you)` : p.name;
+      tr.addEventListener("change", async () => {
+        const fd = new FormData(); fd.set("person_id", p.id); for (const c of tr.querySelectorAll("input:checked")) fd.append("kind", c.value);
+        try { await post(fd); await open(); } catch (e) { err.textContent = e.message; err.hidden = false; }
+      });
+      const rb = tr.querySelector("[data-reset]");
+      if (rb) rb.addEventListener("click", async () => { const fd = new FormData(); fd.set("person_id", p.id); fd.set("reset", "1"); try { await post(fd); await open(); } catch (e) { err.textContent = e.message; err.hidden = false; } });
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb);
   }
   async function post(fd) {
     const r = await fetch(`/cam/${D.camId}/alerts`, { method: "POST", body: fd });
