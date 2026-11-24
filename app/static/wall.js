@@ -51,12 +51,27 @@ function bestCols(n, W, H) {
   for (let c = 1; c <= Math.min(n, 8); c++) { const r = Math.ceil(n / c); const tw = Math.min(W / c, (H / r) * 16 / 9); const area = tw * tw * 9 / 16 * n; if (area > bestArea) { bestArea = area; best = c; } }
   return best;
 }
+// a big window: the column count and tile width that show all n tiles without scrolling
+function fitWall(n, W, H, gap) {
+  let best = { c: 1, tw: 0 };
+  for (let c = 1; c <= Math.min(n, 8); c++) { const r = Math.ceil(n / c); const tw = Math.min((W - gap * (c - 1)) / c, (H - gap * (r - 1)) / r * 16 / 9); if (tw > best.tw) best = { c, tw }; }
+  return best;
+}
 const tiles = new Map();
 function drawWall() {
   const chosen = CAMS.filter(c => sel.has(c.id)).sort(byOrder);
   $("#wallEmpty").hidden = chosen.length > 0;
-  const n = chosen.length, w = wall.clientWidth || innerWidth, fs = !!document.fullscreenElement;
-  const auto = fs ? bestCols(n, innerWidth, innerHeight) : w < 640 ? (n > 1 ? 2 : 1) : n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  const n = chosen.length, fs = !!document.fullscreenElement;
+  wall.style.maxWidth = "";
+  const w = wall.clientWidth || innerWidth;
+  let auto = fs ? bestCols(n, innerWidth, innerHeight) : w < 640 ? (n > 1 ? 2 : 1) : n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  // big window with columns on auto: size the tiles so the whole wall shows without scrolling
+  if (!fs && !cols && n && w >= 1100) {
+    const gap = parseFloat(getComputedStyle(wall).columnGap) || 10, room = innerHeight - (wall.getBoundingClientRect().top + scrollY) - 32;
+    const f = fitWall(n, w, room, gap);
+    if (f.tw >= 280) { auto = f.c; wall.style.maxWidth = Math.floor(f.c * f.tw + gap * (f.c - 1)) + "px"; }
+    else auto = Math.min(n, Math.max(auto, Math.floor((w + gap) / (340 + gap))));   // too many to fit at a useful size: fill the width and scroll
+  }
   wall.style.gridTemplateColumns = `repeat(${cols || auto}, minmax(0, 1fr))`;
   for (const [id, t] of tiles) if (!sel.has(id)) { t.vs.src = ""; t.el.remove(); tiles.delete(id); }
   // keep DOM order in sync with the saved order
