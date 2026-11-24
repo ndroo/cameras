@@ -4,10 +4,15 @@
 {% if not houses %}
   <div class="card narrow"><h1>No cameras yet</h1><p class="muted">{% if me.is_admin %}Head to <a href="/admin">Admin</a> to import cameras from the Tapo account and set up houses.{% else %}You haven't been given access to any cameras yet.{% endif %}</p></div>
 {% endif %}
+{# every row uses the same tile size: the one that fits the property with the most cameras #}
+{% set ns = namespace(n=1) %}{% for h in houses %}{% if h.cams|length > ns.n %}{% set ns.n = h.cams|length %}{% endif %}{% endfor %}
 {% for h in houses %}
 <section class="house">
   <h2>{{ h.name }}</h2>
-  <div class="grid">
+  <div class="rowWrap">
+  <button type="button" class="rowNav prev" aria-label="Scroll left" hidden>‹</button>
+  <button type="button" class="rowNav next" aria-label="Scroll right" hidden>›</button>
+  <div class="grid" style="--n:{{ ns.n }}">
     {% for c in h.cams %}
     <a class="tile" href="/cam/{{ c.id }}">
       <div class="thumb" data-rotate="{{ c.rotate }}" data-fh="{{ c.flip_h }}" data-fv="{{ c.flip_v }}">
@@ -23,7 +28,18 @@
     </a>
     {% endfor %}
   </div>
+  </div>
 </section>
 {% endfor %}
+<script>
+// arrows at the ends of a property row that has more cameras than fit (a mouse wheel can't scroll sideways)
+document.querySelectorAll(".rowWrap").forEach(function (w) {
+  var g = w.querySelector(".grid"), prev = w.querySelector(".prev"), next = w.querySelector(".next");
+  function upd() { var max = g.scrollWidth - g.clientWidth; prev.hidden = g.scrollLeft < 2; next.hidden = g.scrollLeft > max - 2; }
+  function go(dir) { g.scrollBy({ left: dir * Math.max(g.clientWidth * 0.8, 280), behavior: "smooth" }); }
+  prev.addEventListener("click", function () { go(-1); }); next.addEventListener("click", function () { go(1); });
+  g.addEventListener("scroll", upd, { passive: true }); new ResizeObserver(upd).observe(g); upd();
+});
+</script>
 <script type="module" src="/static/orient.js?v={{ v }}"></script>
 {% endblock %}

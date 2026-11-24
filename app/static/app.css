@@ -510,5 +510,13 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 /* big monitors: the camera grid and multi-view use the whole window, not an 1100px column */
 .wrap:has(> section.house),.wrap:has(> .wall){max-width:none}
 .wall{margin:0 auto}
-/* past the old 1100px cap tiles are at least 320px, so columns only ever get added as the window widens: 4 from ~1350px, 5 from ~1690px, 7 at 2560px */
-@media (min-width:1101px){.grid{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}}
+/* home: one row of cameras per property. Tiles shrink so the biggest property fits the row (--n = its camera count),
+   down to 280px; past that the row scrolls sideways. Phones (640px and under) keep the stacked grid. */
+.rowWrap{position:relative}
+@media (min-width:641px){
+  .grid{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:max(280px,min(480px,(100% - (var(--n,6) - 1)*14px)/var(--n,6)));overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:none}
+  .grid::-webkit-scrollbar{display:none}
+  .grid>.tile{scroll-snap-align:start}
+}
+.rowNav{position:absolute;top:calc(50% - 30px);transform:translateY(-50%);z-index:2;margin:0;width:44px;height:44px;padding:0 0 4px;border-radius:50%;background:rgba(15,17,21,.72);color:#fff;font-size:28px;font-weight:400;line-height:1;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.25);box-shadow:0 4px 14px rgba(0,0,0,.3);backdrop-filter:blur(6px)}
+.rowNav.prev{left:8px}.rowNav.next{right:8px}.rowNav:hover{background:rgba(15,17,21,.9)}.rowNav[hidden]{display:none}
