@@ -506,3 +506,9 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 .whoTbl th{font-weight:600;font-size:11px;color:var(--muted);padding:4px 5px;text-align:center}
 .whoTbl td{padding:5px;border-top:1px solid var(--line);text-align:center}.whoTbl td:first-child{text-align:left;white-space:nowrap}
 .whoTbl input{width:auto;margin:0}
+
+/* big monitors: the camera grid and multi-view use the whole window, not an 1100px column */
+.wrap:has(> section.house),.wrap:has(> .wall){max-width:none}
+.wall{margin:0 auto}
+/* past the old 1100px cap tiles are at least 320px, so columns only ever get added as the window widens: 4 from ~1350px, 5 from ~1690px, 7 at 2560px */
+@media (min-width:1101px){.grid{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}}
