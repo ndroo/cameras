@@ -98,6 +98,7 @@ def fmt_dt(ts):
 
 STATIC_V = str(int(time.time()))          # changes on every start, so browsers refetch scripts after a deploy
 tpl.env.globals["v"] = STATIC_V
+tpl.env.globals["tz"] = str(TZ)
 tpl.env.filters["ago"] = fmt_ago
 tpl.env.filters["dt"] = fmt_dt
 tpl.env.filters["hm"] = lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%-I:%M %p").lower()
@@ -1303,7 +1304,10 @@ def _dl_capacity():
 
 def _job_view(j):
     return {k: j[k] for k in ("id", "cam_id", "cam_name", "start", "end", "state", "pct", "bytes", "error", "created", "ready_at", "gaps")} | {
-        "size": j.get("size"), "expires": (j["ready_at"] + DL_KEEP) if j.get("ready_at") else None, "url": f"/downloads/{j['id']}/file" if j["state"] == "ready" else None}
+        "size": j.get("size"), "expires": (j["ready_at"] + DL_KEEP) if j.get("ready_at") else None, "url": f"/downloads/{j['id']}/file" if j["state"] == "ready" else None,
+        "note": j.get("note", ""), "started": j.get("started_at"),
+        # sending = the browser is fetching the file right now; fetched = it has had all of it
+        "sending": j.get("sending", 0) > 0, "fetched": bool(j.get("fetched_at"))}
 
 
 def _job_pieces(j):
@@ -1354,7 +1358,7 @@ def _job_pieces(j):
 
 
 def _run_job(j):
-    j["state"] = "saving"; j["at"] = time.time()
+    j["state"] = "saving"; j["at"] = j["started_at"] = time.time()
     me = {"person": j["person"], "ff": None, "at": time.time(), "done": threading.Event(), "job": j}
     # take the card: wait for (and end) any playback in progress on this camera
     with _playback_guard:
@@ -1450,7 +1454,7 @@ def download_reaper():
 def downloads_json(request: Request):
     me = require(request)
     with _jobs_lock:
-        mine = [_job_view(j) | {"note": j.get("note", "")} for j in _jobs.values() if j["person"] == me["id"]]
+        mine = [_job_view(j) for j in _jobs.values() if j["person"] == me["id"] and j["state"] != "expired" and not j.get("dismissed")]
     mine.sort(key=lambda x: -x["created"])
     return {"jobs": mine, "capacity": _dl_capacity(), "keep": DL_KEEP}
 
@@ -1515,6 +1519,7 @@ def download_cancel(request: Request, jid: str):
     j = _jobs.get(jid)
     if not j or j["person"] != me["id"]:
         raise HTTPException(404)
+    j["dismissed"] = True                  # whatever state it is in, it leaves the person's list
     if j["state"] in ("queued", "saving"):
         j["cancel"].set()
         if j["state"] == "queued":
@@ -1553,16 +1558,20 @@ def download_file(request: Request, jid: str):
     name = f"{j['cam_name']}-{datetime.fromtimestamp(j['start'], TZ).strftime('%Y%m%d-%H%M%S')}.mp4".replace(" ", "_")
 
     def body():
-        with open(path, "rb") as f:
-            f.seek(a); left = b - a + 1
-            while left > 0:
-                data = f.read(min(65536, left))
-                if not data:
-                    break
-                left -= len(data)
-                yield data
-        if left == 0 and b == size - 1:
-            j["fetched_at"] = time.time()
+        j["sending"] = j.get("sending", 0) + 1
+        try:
+            with open(path, "rb") as f:
+                f.seek(a); left = b - a + 1
+                while left > 0:
+                    data = f.read(min(65536, left))
+                    if not data:
+                        break
+                    left -= len(data)
+                    yield data
+            if left == 0 and b == size - 1:
+                j["fetched_at"] = time.time()
+        finally:
+            j["sending"] -= 1
     headers = {"Accept-Ranges": "bytes", "Content-Length": str(b - a + 1), "Cache-Control": "no-store",
                "Content-Disposition": f'attachment; filename="{name}"'}
     if status_code == 206:

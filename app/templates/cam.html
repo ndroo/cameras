@@ -138,16 +138,22 @@
     </div>
   </div>
   <div class="tlTime"><span id="tlTime"></span><span class="grow"></span>
-    <button type="button" class="tool" id="cutBtn" title="Select a stretch to download">⬇ <span>Download</span></button></div>
+    <button type="button" class="tool" id="cutBtn" title="Pick a stretch of footage to download"><i>⬇</i><span>Download</span></button></div>
   <div class="zoomRow" id="zoomRow">
     <button type="button" class="tool" id="panL" title="Earlier">‹</button>
     <span class="zoomBtns" id="zoomBtns"><button type="button" class="tool" data-z="all">All</button><button type="button" class="tool" data-z="21600">6 h</button><button type="button" class="tool" data-z="3600">1 h</button><button type="button" class="tool" data-z="900">15 m</button><button type="button" class="tool" data-z="300">5 m</button></span>
     <button type="button" class="tool" id="panR" title="Later">›</button>
   </div>
-  <div class="track" id="track24"><div class="days"></div><div class="segs"></div><div class="sel"></div><div class="ticks"></div><div class="marks"></div><div class="now"></div><div class="head"></div><div class="bubble" hidden></div></div>
+  <div class="track" id="track24"><div class="days"></div><div class="segs"></div><div class="sel"><i class="selH" data-e="a"></i><i class="selH" data-e="b"></i></div><div class="ticks"></div><div class="marks"></div><div class="now"></div><div class="head"></div><div class="bubble" hidden></div></div>
   <div class="mini" id="mini" hidden><div class="segs"></div><div class="win"></div></div>
   <div class="cutPanel" id="cutPanel" hidden>
-    <div class="small"><b>Download a stretch.</b> Drag across the bar to select, then fine-tune.</div>
+    <div class="cutHead"><span class="small" id="cutSum"></span><span class="grow"></span><button type="button" class="link small" id="cutCancel">Clear</button></div>
+    <div class="cutRow">
+      <button type="button" class="primary small" id="cutGo" hidden>Download</button>
+      <button type="button" class="secondary small" id="cutZoom" hidden>Zoom to selection</button>
+    </div>
+    <div class="small muted" id="cutNote"></div>
+    <details class="cutFine"><summary class="small muted">Fine-tune the start and end</summary>
     <div class="cutGrid">
       <span class="cutLbl">Start</span>
       <span class="nudge"><button type="button" data-n="a,-60">−1m</button><button type="button" data-n="a,-10">−10s</button></span>
@@ -160,17 +166,11 @@
       <span class="nudge"><button type="button" data-n="b,10">+10s</button><button type="button" data-n="b,60">+1m</button></span>
       <button type="button" class="link small" id="cutEnd">set to playhead</button>
     </div>
-    <div class="cutRow">
-      <button type="button" class="primary small" id="cutGo" hidden>Save download</button>
-      <button type="button" class="secondary small" id="cutZoom" hidden>Zoom to selection</button>
-      <button type="button" class="link small" id="cutCancel">Cancel</button>
-    </div>
-    <div class="small muted" id="cutNote"></div>
+    </details>
   </div>
-  <div class="dlList" id="dlList" hidden><div class="small"><b>Downloads</b> <span class="muted tiny" id="dlHint"></span></div><ul id="dlItems"></ul></div>
   <div class="small tlStatus" id="status"></div>
   <div class="tlLoading" id="tlLoading" hidden><i class="spin"></i><span>Reading the card…</span></div>
-  <div class="muted tiny tlHelp">Drag to scrub · scroll or pinch on the bar to zoom · tap a coloured marker's row in the list to jump there.</div>
+  <div class="muted tiny tlHelp"><span class="forMouse">Click the bar to jump to a moment · <b>drag across it to pick a stretch to download</b> · scroll to zoom.</span><span class="forTouch">Tap or drag the bar to move through time · pinch to zoom · ⬇ to download a stretch.</span></div>
   <div class="legend" id="legend"></div>
   <details class="evWrap" id="evWrap" open><summary class="small"><span id="evTitle">Detections</span></summary><ul class="events evList" id="evList"></ul></details>
   <div class="muted tiny cardInfo" id="cardInfo">Footage comes straight from the card, so playback takes a few seconds to start.</div>

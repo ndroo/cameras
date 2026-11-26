@@ -411,6 +411,7 @@ function setURL() {
   history.replaceState(null, "", `/cam/${D.camId}?${q}`);
 }
 function myJobOn(cam) { return DL.jobs.find(j => j.cam_id === cam && j.state === "saving"); }
+const BUSY_MSG = "Recordings can't play on this camera while it copies your download";
 
 function play(t) {
   if (hasNow() && t >= now() - 30) return goLive();
@@ -418,7 +419,7 @@ function play(t) {
   if (n === null) { status.textContent = "No footage after that time in this range."; S.t = t; draw(); return; }
   const c = covered(n); t = n;
   const job = myJobOn(D.camId);
-  if (job) { status.textContent = `The camera is busy saving your download (${job.pct}%). Playback works again when it's done.`; S.t = t; draw(); return; }
+  if (job) { status.textContent = `${BUSY_MSG} (${job.pct}% done).`; S.t = t; draw(); return; }
   S.mode = "play"; S.t = t; S.segStart = t; S.segEnd = Math.min(c.end, t + D.maxClip); S.playing = false;
   stopLive(); live.style.display = "none"; clip.hidden = false; privOverlay.hidden = true; showPtz(); showSeek();
   const url = `/stream/${D.camId}/clip.mp4?start=${S.segStart}&end=${S.segEnd}&speed=${speed.value}`;
@@ -454,7 +455,7 @@ seekBtns.addEventListener("click", ev => {
 clip.addEventListener("playing", () => { hideHint(); S.playing = true; });
 clip.addEventListener("waiting", () => showHint("Buffering…"));
 clip.addEventListener("loadedmetadata", () => noteAr(clip));
-clip.addEventListener("timeupdate", () => { if (S.mode === "play" && S.playing && !drag) { S.t = S.segStart + clip.currentTime; label.textContent = fmtTs(S.t); keepInView(S.t); draw(); } });
+clip.addEventListener("timeupdate", () => { if (S.mode === "play" && S.playing && !scrubbing()) { S.t = S.segStart + clip.currentTime; label.textContent = fmtTs(S.t); keepInView(S.t); draw(); } });
 clip.addEventListener("ended", () => { const n = nextCovered(S.segEnd + 1); if (n !== null && n < S.to) play(n); else if (hasNow()) goLive(); else status.textContent = "End of footage in this range."; });
 // the camera serves one playback at a time and can be briefly busy (another viewer, or
 // one just abandoned): retry a couple of times before giving up
@@ -649,7 +650,9 @@ function draw() {
     }
   }
   const selEl = track.querySelector(".sel");
-  if (cut.on && cut.a && cut.b) { const s1 = Math.max(a, Math.min(cut.a, cut.b)), e1 = Math.min(b, Math.max(cut.a, cut.b)); selEl.style.display = e1 > s1 ? "" : "none"; selEl.style.left = X(s1); selEl.style.width = W(s1, e1); }
+  if (cut.a && cut.b) { const lo = Math.min(cut.a, cut.b), hi = Math.max(cut.a, cut.b), s1 = Math.max(a, lo), e1 = Math.min(b, hi);
+    selEl.style.display = e1 >= s1 && hi > lo ? "" : "none"; selEl.style.left = X(s1); selEl.style.width = W(s1, e1);
+    selEl.classList.toggle("offL", lo < a); selEl.classList.toggle("offR", hi > b); }      // an end that's out of view has no handle
   else selEl.style.display = "none";
   const nowEl = track.querySelector(".now"); const showNow = nowT >= a && nowT <= b; nowEl.style.display = showNow ? "" : "none"; if (showNow) nowEl.style.left = X(nowT);
   const future = track.querySelector(".future") || Object.assign(track.appendChild(document.createElement("div")), { className: "future" });
@@ -689,18 +692,27 @@ function drawMini() {
   mini.addEventListener("pointermove", ev => { if (on && view) go(ev); });
   mini.addEventListener("pointerup", () => { on = false; }); mini.addEventListener("pointercancel", () => { on = false; }); }
 
-let drag = null; const ptrs = new Map(); let pinch = null;
+// A click or tap jumps to that moment. Dragging with a mouse picks a stretch to download
+// (there was nothing to see while scrubbing with one anyway: the picture only changes on
+// release). Dragging with a finger still scrubs, unless Download was tapped first.
+let drag = null; const ptrs = new Map(); let pinch = null;    // drag: { kind: "seek" | "maybe" | "select" | "edge", x0, t0, edge }
+const scrubbing = () => !!drag && drag.kind === "seek";
 const tAt = x => { const r = track.getBoundingClientRect(); const [a, b] = vis(); const f = Math.min(1, Math.max(0, (x - r.left) / r.width)); return Math.round(a + f * (b - a)); };
-function showBubble(x, t) {
+const tSel = x => Math.min(tAt(x), now());                      // a selection can't run into the future
+function showBubble(x, t, extra) {
   const r = track.getBoundingClientRect(), [a, b] = vis();
-  bubble.hidden = false; bubble.textContent = fmtWhen(t, (b - a) < 3 * 3600);
+  bubble.hidden = false; bubble.textContent = fmtWhen(t, (b - a) < 3 * 3600) + (extra ? " · " + extra : "");
   bubble.style.left = Math.min(r.width - bubble.offsetWidth / 2, Math.max(bubble.offsetWidth / 2, x - r.left)) + "px";
 }
+const selLen = () => cut.a && cut.b && cut.a !== cut.b ? fmtDur(Math.abs(cut.b - cut.a)) : "";
 track.addEventListener("pointerdown", ev => {
+  if (ev.pointerType === "mouse" && ev.button !== 0) return;
   track.setPointerCapture(ev.pointerId); ptrs.set(ev.pointerId, ev.clientX); ev.preventDefault();
   if (ptrs.size === 2) { const [x1, x2] = [...ptrs.values()]; pinch = { d: Math.abs(x2 - x1), mid: tAt((x1 + x2) / 2), view: vis().slice() }; drag = null; return; }
-  if (cut.on) { cut.dragging = true; cut.a = tAt(ev.clientX); cut.b = cut.a; drawCut(); showBubble(ev.clientX, cut.a); return; }
-  drag = true; S.t = snap(tAt(ev.clientX)); showBubble(ev.clientX, S.t); draw();
+  const h = ev.target.closest(".selH");
+  if (h) { sortCut(); drag = { kind: "edge", edge: h.dataset.e }; showBubble(ev.clientX, cut[drag.edge], selLen()); return; }
+  if (cut.on || ev.pointerType === "mouse") { drag = { kind: "maybe", x0: ev.clientX, t0: tSel(ev.clientX) }; showBubble(ev.clientX, tAt(ev.clientX)); return; }
+  drag = { kind: "seek" }; S.t = snap(tAt(ev.clientX)); showBubble(ev.clientX, S.t); draw();
 });
 track.addEventListener("pointermove", ev => {
   if (!ptrs.has(ev.pointerId)) { if (ev.pointerType === "mouse") showBubble(ev.clientX, tAt(ev.clientX)); return; }
@@ -708,14 +720,26 @@ track.addEventListener("pointermove", ev => {
   if (pinch && ptrs.size === 2) { const [x1, x2] = [...ptrs.values()]; const d = Math.abs(x2 - x1) || 1;
     const span = (pinch.view[1] - pinch.view[0]) * pinch.d / d; const r = track.getBoundingClientRect(); const f = ((x1 + x2) / 2 - r.left) / r.width;
     setView(pinch.mid - f * span, pinch.mid + (1 - f) * span); return; }
-  if (cut.dragging) { cut.b = tAt(ev.clientX); showBubble(ev.clientX, cut.b); drawCut(); return; }
-  if (drag) { S.t = snap(tAt(ev.clientX)); showBubble(ev.clientX, S.t); draw(); }
+  if (!drag) return;
+  const x = ev.clientX;
+  if (drag.kind === "maybe" && Math.abs(x - drag.x0) > 5) { drag.kind = "select"; cut.a = drag.t0; }
+  if (drag.kind === "select") { cut.b = tSel(x); drawCut(); showBubble(x, cut.b, selLen()); }
+  else if (drag.kind === "edge") { cut[drag.edge] = tSel(x); drawCut(); showBubble(x, cut[drag.edge], selLen()); }
+  else if (drag.kind === "seek") { S.t = snap(tAt(x)); showBubble(x, S.t); draw(); }
+  else showBubble(x, tAt(x));
 });
 track.addEventListener("pointerleave", ev => { if (!ptrs.size) bubble.hidden = true; });
 const endPtr = ev => { ptrs.delete(ev.pointerId); if (ptrs.size < 2) pinch = null; if (ev.pointerType !== "mouse") bubble.hidden = true;
-  if (cut.dragging) { cut.dragging = false; cut.b = tAt(ev.clientX); drawCut(); return; }
-  if (drag && ptrs.size === 0) { drag = null; const t = snap(tAt(ev.clientX)); const r = track.getBoundingClientRect();
-    if (hasNow() && (t >= now() - 30 || (!view && ev.clientX >= r.right - 6))) goLive(); else play(t); } };
+  if (!drag || ptrs.size) return;
+  const d = drag; drag = null;
+  if (d.kind === "select" || d.kind === "edge") {                 // a stretch was picked or adjusted
+    sortCut();
+    if (cut.b - cut.a < MIN_SEL) { if (d.kind === "edge") cut.b = cut.a + MIN_SEL; else cut.a = cut.b = 0; }
+    drawCut(); if (hasSel()) cutPanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return; }
+  if (ev.type === "pointercancel") { draw(); return; }
+  const t = snap(tAt(ev.clientX)), r = track.getBoundingClientRect();
+  if (hasNow() && (t >= now() - 30 || (!view && ev.clientX >= r.right - 6))) goLive(); else play(t); };
 track.addEventListener("pointerup", endPtr); track.addEventListener("pointercancel", endPtr);
 track.addEventListener("wheel", ev => { ev.preventDefault(); if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY) && view) { const [a, b] = view, s = b - a; setView(a + ev.deltaX / track.clientWidth * s, b + ev.deltaX / track.clientWidth * s); }
   else zoomAt(ev.deltaY < 0 ? 1.25 : 0.8, tAt(ev.clientX)); }, { passive: false });
@@ -725,82 +749,65 @@ $("#panL").addEventListener("click", () => { if (view) { const s = view[1] - vie
 $("#panR").addEventListener("click", () => { if (view) { const s = view[1] - view[0]; setView(view[0] + s * 0.8, view[1] + s * 0.8); } });
 setInterval(() => { if (!drag && !pinch) { if (RANGES[S.range]) { const to = now() + 60; S.from += to - S.to; S.to = to; } if (S.mode === "live" && hasNow()) { S.t = now(); keepInView(S.t); } draw(); } }, 15000);
 
-// ---------------------------------------------------------------- downloads (saved on the server, then fetched)
-const cut = { on: false, a: 0, b: 0, dragging: false };
+// ---------------------------------------------------------------- downloads
+// Pick a stretch on the bar, press Download. The server copies it off the card and the
+// downloads tray (downloads.js, on every page) shows progress and fetches the file when ready.
+const MIN_SEL = 5;
+const cut = { on: false, a: 0, b: 0 };     // on: "pick a stretch" mode (what makes a finger drag select); a, b: the two ends
 const cutPanel = $("#cutPanel");
 const BYTES_PER_SEC = 150000;   // measured ~45 MB per 5 min of 1080p from the card
-const DL = { jobs: [], capacity: null, timer: null };
+const DL = window.Downloads || { jobs: [], capacity: null, started() {}, refresh() {}, on() {} };
 const fmtDur = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.round(s % 60); return h ? `${h} h ${m} min` : m ? `${m} min${x && m < 10 ? ` ${x} s` : ""}` : `${x} s`; };
 const fmtMB = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`;
 const footageIn = (lo, hi) => S.clips.reduce((n, c) => n + Math.max(0, Math.min(hi, c.end) - Math.max(lo, c.start)), 0);
+const hasSel = () => cut.a > 0 && cut.b > 0 && Math.abs(cut.b - cut.a) >= MIN_SEL;
+function sortCut() { if (cut.a && cut.b && cut.a > cut.b) [cut.a, cut.b] = [cut.b, cut.a]; }
 function drawCut() {
-  const lo = Math.min(cut.a, cut.b), hi = Math.max(cut.a, cut.b);
+  const lo = Math.min(cut.a, cut.b), hi = Math.max(cut.a, cut.b), len = hi - lo, ok = hasSel();
+  const go = $("#cutGo"), note = $("#cutNote"), btn = $("#cutBtn"), active = cut.on || (cut.a > 0 && cut.b > 0);
+  cutPanel.hidden = !active; track.classList.toggle("cutting", cut.on);
+  btn.classList.toggle("active", active); btn.querySelector("i").textContent = active ? "✕" : "⬇"; btn.querySelector("span").textContent = active ? "Cancel" : "Download";
+  btn.title = active ? "Clear the selection" : "Pick a stretch of footage to download";
   $("#cutStartT").textContent = cut.a ? fmtWhen(lo, true) : "–"; $("#cutEndT").textContent = cut.b && hi > lo ? fmtWhen(hi, true) : "–";
-  const go = $("#cutGo"), note = $("#cutNote"), len = hi - lo, ok = cut.a && cut.b && len >= 5;
-  go.hidden = !ok; $("#cutZoom").hidden = !ok; note.textContent = "";
+  $("#cutSum").innerHTML = ok ? `<b>${fmtWhen(lo, true)}</b> to <b>${keyOf(lo) === keyOf(hi) ? fmtTs(hi) : fmtWhen(hi, true)}</b> <span class="muted">· ${fmtDur(len)}</span>`
+    : `<b>Pick what to download.</b> Drag across the bar above, from where it should start to where it should end.`;
+  go.hidden = !ok; $("#cutZoom").hidden = !ok; note.textContent = ""; note.className = "small muted";
   if (ok) {
     const secs = footageIn(lo, hi), size = secs * BYTES_PER_SEC;
     const capNote = DL.capacity != null && secs > DL.capacity ? ` Right now the server has room for about ${fmtDur(DL.capacity)}.` : "";
     if (!secs) { go.hidden = true; note.textContent = "There's no footage on the card in that stretch."; }
-    else if (len > D.maxDownload) { go.hidden = true; note.textContent = `${fmtDur(len)} selected. The limit is ${Math.round(D.maxDownload / 3600)} hours per file.`; }
+    else if (len > D.maxDownload) { go.hidden = true; note.textContent = `That's ${fmtDur(len)}. The limit is ${Math.round(D.maxDownload / 3600)} hours per file.`; }
     else if (S.privacy.some(([ps, pe]) => ps < hi && pe > lo)) { go.hidden = true; note.textContent = "That stretch includes privacy-mode time, which can't be downloaded."; }
-    else { go.textContent = `Save download · ${fmtDur(secs)} · ~${fmtMB(size)}`; note.textContent = "The server saves it from the camera (about as long as the footage takes to play), then you download the file. It's deleted once downloaded, or after an hour." + capNote; }
+    else { go.textContent = `⬇ Download · ${fmtDur(secs)} · about ${fmtMB(size)}`;
+      note.textContent = `The camera hands footage over at about playing speed, so this can take up to ${fmtDur(Math.max(60, secs))} to get ready. It then downloads by itself.` + capNote; }
   }
   draw();
 }
-function setCut(on) { cut.on = on; cut.a = cut.b = 0; cutPanel.hidden = !on; $("#cutBtn").classList.toggle("active", on); $("#cutBtn").querySelector("span").textContent = on ? "Done" : "Download"; track.classList.toggle("cutting", on); if (on) pollJobs(); drawCut(); }
+function setCut(on) { cut.on = on; if (!on) cut.a = cut.b = 0; drawCut(); }
 const playhead = () => Math.round(S.mode === "live" ? now() : S.t);
 $("#cutStart").addEventListener("click", () => { cut.a = playhead(); if (!cut.b || cut.b < cut.a) cut.b = 0; drawCut(); });
 $("#cutEnd").addEventListener("click", () => { cut.b = playhead(); if (!cut.a) cut.a = Math.max(S.from, cut.b - 60); drawCut(); });
 cutPanel.addEventListener("click", ev => { const b = ev.target.closest("button[data-n]"); if (!b) return; const [k, d] = b.dataset.n.split(",");
   if (!cut.a || !cut.b) { const p = playhead(), lv = S.mode === "live"; cut.a = lv ? p - 60 : p; cut.b = lv ? p : Math.min(now(), p + 60); }
-  const lo = Math.min(cut.a, cut.b), hi = Math.max(cut.a, cut.b); cut.a = lo; cut.b = hi;
-  cut[k] = Math.min(now(), Math.max(S.from, cut[k] + +d)); drawCut(); });
+  sortCut(); cut[k] = Math.min(now(), Math.max(S.from, cut[k] + +d)); drawCut(); });
 $("#cutCancel").addEventListener("click", () => setCut(false));
-$("#cutBtn").addEventListener("click", () => setCut(!cut.on));
+$("#cutBtn").addEventListener("click", () => setCut(!(cut.on || (cut.a > 0 && cut.b > 0))));
 $("#cutZoom").addEventListener("click", () => { const lo = Math.min(cut.a, cut.b), hi = Math.max(cut.a, cut.b), pad = (hi - lo) * 0.15; setView(lo - pad, hi + pad); });
-async function startDownload(lo, hi, btn) {
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && (cut.on || cut.a) && $("#calModal").hidden) setCut(false); });
+async function startDownload(lo, hi, btn, fromSel) {
   if (btn) btn.disabled = true;
   try {
     const fd = new FormData(); fd.set("start", Math.round(lo)); fd.set("end", Math.round(hi));
     const r = await fetch(`/cam/${D.camId}/downloads`, { method: "POST", body: fd }), j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.error || j.detail || "Couldn't start the download.");
-    status.textContent = "Saving from the camera… it'll show under Downloads when it's ready.";
-    if (cut.on) setCut(false);
-    if (S.mode === "play") goLive();          // the card is busy with the download now
-    pollJobs();
-  } catch (e) { status.textContent = e.message; $("#cutNote").textContent = e.message; }
+    DL.started(j.job);                          // the tray opens and takes it from here
+    if (fromSel && cut.a === lo && cut.b === hi) setCut(false);   // not a stretch picked since (a detection's ⬇ leaves it alone)
+    if (S.mode === "play") { goLive(); status.textContent = BUSY_MSG + ", so this is back on live."; } else status.textContent = "";
+  } catch (e) { const note = $("#cutNote"); if (!fromSel || cutPanel.hidden) status.textContent = e.message; else { note.textContent = e.message; note.className = "small err"; } }
   finally { if (btn) btn.disabled = false; }
 }
-$("#cutGo").addEventListener("click", ev => startDownload(Math.min(cut.a, cut.b), Math.max(cut.a, cut.b), ev.currentTarget));
-async function pollJobs() {
-  clearTimeout(DL.timer);
-  try { const j = await (await fetch("/downloads.json")).json(); DL.jobs = j.jobs || []; DL.capacity = j.capacity; } catch {}
-  drawJobs();
-  const active = DL.jobs.some(j => j.state === "queued" || j.state === "saving");
-  if (!active && status.textContent.startsWith("Saving from the camera")) status.textContent = "";
-  DL.timer = setTimeout(pollJobs, active ? 2000 : 30000);
-}
-function drawJobs() {
-  const list = $("#dlList"), ul = $("#dlItems"); const show = DL.jobs.filter(j => j.state !== "expired");
-  list.hidden = !show.length; ul.innerHTML = "";
-  $("#dlHint").textContent = show.some(j => j.state === "ready") ? "Ready files are deleted after you download them, or after an hour." : "";
-  for (const j of show) {
-    const li = document.createElement("li"), when = `${new Date(j.start * 1000).toLocaleDateString("en-CA", { timeZone: TZ, weekday: "short", month: "short", day: "numeric" })}, ${fmtT(j.start)}–${fmtT(j.end)}`;
-    let right = "";
-    if (j.state === "queued") right = `<span class="muted small">Waiting…</span> <button type="button" class="link small" data-cancel="${j.id}">Cancel</button>`;
-    else if (j.state === "saving") right = `<span class="pbarS"><i style="width:${j.pct}%"></i></span><span class="small">${j.pct}%${j.note ? " · " + j.note : ""}</span> <button type="button" class="link small" data-cancel="${j.id}">Cancel</button>`;
-    else if (j.state === "ready") right = `<a class="btn primary small" href="${j.url}" download>Download · ${fmtMB(j.size)}</a> <span class="muted tiny">until ${fmtT(j.expires)}</span> <button type="button" class="link small" data-cancel="${j.id}">Delete</button>`;
-    else right = `<span class="err small">${j.state === "cancelled" ? "Cancelled" : (j.error || "Failed")}</span> <button type="button" class="link small" data-retry="${j.start},${j.end},${j.cam_id}">Try again</button>`;
-    li.innerHTML = `<span><b>${j.cam_name}</b> <span class="muted small">${when}${j.gaps ? ` · ${j.gaps} short gap${j.gaps > 1 ? "s" : ""}` : ""}</span></span><span class="dlRight">${right}</span>`;
-    ul.appendChild(li);
-  }
-}
-$("#dlItems").addEventListener("click", async ev => {
-  const c = ev.target.closest("[data-cancel]"), r = ev.target.closest("[data-retry]");
-  if (c) { c.disabled = true; await fetch(`/downloads/${c.dataset.cancel}/cancel`, { method: "POST" }); pollJobs(); }
-  if (r) { const [a, b, cam] = r.dataset.retry.split(",").map(Number); if (cam !== D.camId) { location.href = `/cam/${cam}`; return; } startDownload(a, b, r); }
-});
+$("#cutGo").addEventListener("click", ev => { sortCut(); startDownload(cut.a, cut.b, ev.currentTarget, true); });
+DL.on(() => { if (status.textContent.startsWith(BUSY_MSG) && !myJobOn(D.camId)) status.textContent = ""; });
 
 // ---------------------------------------------------------------- speed
 const speed = $("#speed");
@@ -933,6 +940,6 @@ $("#nextM").addEventListener("click", () => { const y = +S.month.slice(0, 4), m 
 
 // ---------------------------------------------------------------- start
 S.days = new Map();
-layout(); draw(); drawEvents(); drawSound(); showSeek(); pollJobs();
+layout(); draw(); drawEvents(); drawSound(); showSeek();
 if (D.at) { S.mode = "play"; S.t = D.at; load(D.at); } else { goLive(); load(); }
 loadMonth(S.month);

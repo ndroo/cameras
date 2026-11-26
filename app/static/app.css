@@ -472,10 +472,6 @@ button.failed{background:var(--bad)!important;color:#fff!important}
 .nudge button{margin:0;width:auto;padding:3px 7px;font-size:12px;border-radius:7px;background:var(--line);color:var(--fg)}
 .cutRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cutRow button{width:auto;margin:0}
 @media (max-width:560px){.cutGrid{grid-template-columns:auto 1fr auto}.cutGrid .nudge:nth-of-type(odd){display:none}.cutGrid .link{grid-column:1/-1;justify-self:start}}
-.dlList{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:0 0 10px}
-.dlList ul{list-style:none;margin:6px 0 0;padding:0}.dlList li{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
-.dlRight{display:inline-flex;align-items:center;gap:8px}.dlRight .btn{padding:5px 10px;font-size:13px}
-.pbarS{display:inline-block;width:90px;height:6px;border-radius:3px;background:var(--line);overflow:hidden}.pbarS i{display:block;height:100%;background:var(--acc);transition:width .5s}
 .legend .lk{margin:0;width:auto;padding:2px 6px;border-radius:6px;background:transparent;color:var(--fg);font-size:13px;font-weight:400}
 .legend .lk.off{opacity:.4;text-decoration:line-through}
 ul.evList li.evDay{cursor:default;font-weight:600;font-size:13px;color:var(--muted);padding-top:8px}
@@ -520,3 +516,50 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 }
 .rowNav{position:absolute;top:calc(50% - 30px);transform:translateY(-50%);z-index:2;margin:0;width:44px;height:44px;padding:0 0 4px;border-radius:50%;background:rgba(15,17,21,.72);color:#fff;font-size:28px;font-weight:400;line-height:1;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.25);box-shadow:0 4px 14px rgba(0,0,0,.3);backdrop-filter:blur(6px)}
 .rowNav.prev{left:8px}.rowNav.next{right:8px}.rowNav:hover{background:rgba(15,17,21,.9)}.rowNav[hidden]{display:none}
+
+/* picking a stretch to download: drag across the bar (mouse), or tap Download first (touch); a handle on each end to adjust */
+.track{cursor:crosshair}
+.track .sel{background:rgba(255,214,10,.3);z-index:2}
+.track .sel.offL{border-left-color:transparent}.track .sel.offR{border-right-color:transparent}
+.selH{position:absolute;top:-5px;bottom:-5px;width:20px;pointer-events:auto;cursor:ew-resize;touch-action:none}
+.selH[data-e="a"]{left:-11px}.selH[data-e="b"]{right:-11px}
+.selH::after{content:"";position:absolute;top:50%;left:50%;width:8px;height:26px;transform:translate(-50%,-50%);background:#ffd60a;border-radius:4px;box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+.sel.offL .selH[data-e="a"],.sel.offR .selH[data-e="b"]{display:none}
+@media (pointer:coarse){.selH{width:36px}.selH[data-e="a"]{left:-19px}.selH[data-e="b"]{right:-19px}.selH::after{width:10px;height:30px}}
+.tool i{font-style:normal}.tlTime .tool{height:32px}
+.cutPanel{border-color:#ffd60a;padding:12px 14px}
+.cutHead{display:flex;align-items:baseline;gap:10px}.cutHead .grow{flex:1}
+.cutRow button.primary{padding:9px 16px;font-size:15px}
+.cutRow:not(:has(button:not([hidden]))){display:none}
+#cutNote{margin-top:8px}#cutNote:empty{display:none}
+.cutFine{margin-top:10px}.cutFine summary{cursor:pointer}
+.tlHelp .forTouch{display:none}.tlHelp b{font-weight:600;color:var(--fg)}
+@media (hover:none),(pointer:coarse){.tlHelp .forMouse{display:none}.tlHelp .forTouch{display:inline}}
+
+/* downloads tray: on every page, bottom right. Shows footage being copied off a camera and the file once it's ready */
+.dlTray{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));width:360px;max-width:calc(100vw - 16px);background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.45);z-index:30;overflow:hidden}
+.dlTray.shut{width:auto}.dlTray.shut .dlBody{display:none}.dlTray.shut .chev{transform:rotate(180deg)}
+.dlTrayHead{margin:0;width:100%;display:flex;align-items:center;gap:8px;padding:11px 14px;background:none;color:var(--fg);font-size:14px;font-weight:700;border-radius:0;text-align:left}
+.dlTrayHead .sum{font-weight:500;color:var(--acc);font-size:13px}.dlTrayHead .sum:empty{display:none}
+.dlTrayHead .grow{flex:1;min-width:12px}.dlTrayHead .chev{color:var(--muted);transition:transform .15s}
+.dlBody{max-height:min(55vh,380px);overflow:auto;border-top:1px solid var(--line)}
+.dlTray ul{list-style:none;margin:0;padding:0}
+.dlJob{padding:11px 14px;border-bottom:1px solid var(--line)}.dlJob:last-child{border-bottom:0}
+.dlTop{display:flex;align-items:flex-start;gap:8px}.dlTop .what{flex:1;min-width:0;font-size:14px;line-height:1.3}.dlTop .what .muted{font-size:13px;white-space:nowrap}
+.dlX{margin:-2px -4px 0 0;width:auto;padding:0 5px;background:none;color:var(--muted);font-size:20px;line-height:1;font-weight:400}.dlX:hover{color:var(--fg)}
+.dlBar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:9px 0 0}
+.dlBar i{display:block;height:100%;width:0;background:var(--acc);border-radius:3px;transition:width .8s linear}
+.dlJob.is-queued .dlBar i,.dlBar.busy i{width:30%;animation:dlSlide 1.3s ease-in-out infinite alternate}.dlJob.is-queued .dlBar i{opacity:.45}
+@keyframes dlSlide{from{margin-left:0}to{margin-left:70%}}
+.dlLine{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:7px}.dlLine .grow{flex:1}
+.dlLine.tiny{font-size:12px;margin-top:5px}
+.dlLine .okTxt{color:var(--ok);font-weight:700}.dlLine .dlPct{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.dlLine .btn.go{background:var(--acc);color:#fff;padding:6px 14px;font-size:13px}
+.dlLine.held{color:var(--fg)}
+.dlFoot{padding:9px 14px;border-top:1px solid var(--line);line-height:1.35}
+.dlJob.flash{animation:dlFlash 2s ease-out}
+@keyframes dlFlash{from{background:rgba(79,140,255,.32)}to{background:transparent}}
+/* room to scroll the end of the page clear of the tray */
+body:has(.dlTray:not([hidden])) .wrap{padding-bottom:calc(24px + var(--tray,0px) + env(safe-area-inset-bottom))}
+@media (max-width:640px){.dlTray{left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));width:auto;max-width:none}.dlTray.shut{left:auto}}
+@media (prefers-reduced-motion: reduce){.dlJob.flash,.dlJob.is-queued .dlBar i,.dlBar.busy i{animation:none}}

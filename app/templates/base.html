@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f1115">
+{% if me %}<script src="/static/downloads.js?v={{ v }}" defer></script>{% endif %}
 </head>
 <body>
 <div class="pbar" id="pbar"></div>
@@ -28,6 +29,12 @@
 <main class="wrap">
 {% block body %}{% endblock %}
 </main>
+{% if me %}
+<aside class="dlTray" id="dlTray" data-tz="{{ tz }}" aria-label="Downloads" hidden>
+  <button type="button" class="dlTrayHead" aria-expanded="true"><span>⬇ Downloads</span><span class="sum" aria-live="polite"></span><span class="grow"></span><span class="chev">▾</span></button>
+  <div class="dlBody"><ul></ul><div class="dlFoot muted tiny" hidden></div></div>
+</aside>
+{% endif %}
 <script>
 (function(){
   var bar = document.getElementById("pbar"), t;
