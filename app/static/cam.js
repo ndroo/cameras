@@ -735,7 +735,7 @@ const endPtr = ev => { ptrs.delete(ev.pointerId); if (ptrs.size < 2) pinch = nul
   if (d.kind === "select" || d.kind === "edge") {                 // a stretch was picked or adjusted
     sortCut();
     if (cut.b - cut.a < MIN_SEL) { if (d.kind === "edge") cut.b = cut.a + MIN_SEL; else cut.a = cut.b = 0; }
-    drawCut(); if (hasSel()) cutPanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    drawCut(); if (hasSel()) { cutPanel.scrollIntoView({ block: "nearest", behavior: "smooth" }); DL.refresh(); }   // fresh word on how much the server can take
     return; }
   if (ev.type === "pointercancel") { draw(); return; }
   const t = snap(tAt(ev.clientX)), r = track.getBoundingClientRect();
@@ -771,17 +771,31 @@ function drawCut() {
   $("#cutStartT").textContent = cut.a ? fmtWhen(lo, true) : "–"; $("#cutEndT").textContent = cut.b && hi > lo ? fmtWhen(hi, true) : "–";
   $("#cutSum").innerHTML = ok ? `<b>${fmtWhen(lo, true)}</b> to <b>${keyOf(lo) === keyOf(hi) ? fmtTs(hi) : fmtWhen(hi, true)}</b> <span class="muted">· ${fmtDur(len)}</span>`
     : `<b>Pick what to download.</b> Drag across the bar above, from where it should start to where it should end.`;
+  const fit = $("#cutFit"); fit.hidden = true;
   go.hidden = !ok; $("#cutZoom").hidden = !ok; note.textContent = ""; note.className = "small muted";
   if (ok) {
-    const secs = footageIn(lo, hi), size = secs * BYTES_PER_SEC;
-    const capNote = DL.capacity != null && secs > DL.capacity ? ` Right now the server has room for about ${fmtDur(DL.capacity)}.` : "";
+    const secs = footageIn(lo, hi), size = secs * BYTES_PER_SEC, room = roomFor();
     if (!secs) { go.hidden = true; note.textContent = "There's no footage on the card in that stretch."; }
     else if (len > D.maxDownload) { go.hidden = true; note.textContent = `That's ${fmtDur(len)}. The limit is ${Math.round(D.maxDownload / 3600)} hours per file.`; }
     else if (S.privacy.some(([ps, pe]) => ps < hi && pe > lo)) { go.hidden = true; note.textContent = "That stretch includes privacy-mode time, which can't be downloaded."; }
+    // the server saves the whole file before you get it, and its disk is small: don't offer what it will refuse
+    else if (room != null && secs > room) { go.hidden = true;
+      if (room < 60) note.textContent = "The server has no room for more footage right now. Try again once your other downloads have finished.";
+      else { fit.hidden = false; fit.textContent = `Shorten to ${fmtDur(room)}`;
+        note.textContent = `That's ${fmtDur(secs)} of footage, but the server only has room for about ${fmtDur(room)} at a time right now. Shorten it, or download it in parts.`; } }
     else { go.textContent = `⬇ Download · ${fmtDur(secs)} · about ${fmtMB(size)}`;
-      note.textContent = `The camera hands footage over at about playing speed, so this can take up to ${fmtDur(Math.max(60, secs))} to get ready. It then downloads by itself.` + capNote; }
+      note.textContent = `The camera hands footage over at about playing speed, so this can take up to ${fmtDur(Math.max(60, secs))} to get ready. It then downloads by itself.`; }
   }
   draw();
+}
+// seconds of footage the server can take now (a little under what it reports, so a borderline pick isn't refused)
+const roomFor = () => DL.capacity == null ? null : Math.floor(DL.capacity * 0.95);
+// keep the start, pull the end in until the footage inside fits
+function fitCut(secs) {
+  sortCut(); let left = secs, end = cut.a;
+  for (const c of S.clips) { const s = Math.max(cut.a, c.start), e = Math.min(cut.b, c.end); if (e <= s) continue;
+    if (e - s >= left) { end = s + left; break; } left -= e - s; end = e; }
+  cut.b = Math.floor(end); drawCut();
 }
 function setCut(on) { cut.on = on; if (!on) cut.a = cut.b = 0; drawCut(); }
 const playhead = () => Math.round(S.mode === "live" ? now() : S.t);
@@ -792,6 +806,7 @@ cutPanel.addEventListener("click", ev => { const b = ev.target.closest("button[d
   sortCut(); cut[k] = Math.min(now(), Math.max(S.from, cut[k] + +d)); drawCut(); });
 $("#cutCancel").addEventListener("click", () => setCut(false));
 $("#cutBtn").addEventListener("click", () => setCut(!(cut.on || (cut.a > 0 && cut.b > 0))));
+$("#cutFit").addEventListener("click", () => { const r = roomFor(); if (r) fitCut(r); });
 $("#cutZoom").addEventListener("click", () => { const lo = Math.min(cut.a, cut.b), hi = Math.max(cut.a, cut.b), pad = (hi - lo) * 0.15; setView(lo - pad, hi + pad); });
 document.addEventListener("keydown", ev => { if (ev.key === "Escape" && (cut.on || cut.a) && $("#calModal").hidden) setCut(false); });
 async function startDownload(lo, hi, btn, fromSel) {
@@ -799,7 +814,11 @@ async function startDownload(lo, hi, btn, fromSel) {
   try {
     const fd = new FormData(); fd.set("start", Math.round(lo)); fd.set("end", Math.round(hi));
     const r = await fetch(`/cam/${D.camId}/downloads`, { method: "POST", body: fd }), j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || j.detail || "Couldn't start the download.");
+    if (!r.ok || !j.ok) {
+      // too big for the room the server has now: show what fits and offer to shorten, rather than just an error
+      if (fromSel && j.capacity != null) { DL.capacity = j.capacity; drawCut(); if ($("#cutGo").hidden) return; }
+      throw new Error(j.error || j.detail || "Couldn't start the download.");
+    }
     DL.started(j.job);                          // the tray opens and takes it from here
     if (fromSel && cut.a === lo && cut.b === hi) setCut(false);   // not a stretch picked since (a detection's ⬇ leaves it alone)
     if (S.mode === "play") { goLive(); status.textContent = BUSY_MSG + ", so this is back on live."; } else status.textContent = "";
@@ -807,7 +826,8 @@ async function startDownload(lo, hi, btn, fromSel) {
   finally { if (btn) btn.disabled = false; }
 }
 $("#cutGo").addEventListener("click", ev => { sortCut(); startDownload(cut.a, cut.b, ev.currentTarget, true); });
-DL.on(() => { if (status.textContent.startsWith(BUSY_MSG) && !myJobOn(D.camId)) status.textContent = ""; });
+DL.on(() => { if (status.textContent.startsWith(BUSY_MSG) && !myJobOn(D.camId)) status.textContent = "";
+  if (hasSel() && !drag) drawCut(); });      // room on the server changes as downloads come and go
 
 // ---------------------------------------------------------------- speed
 const speed = $("#speed");
