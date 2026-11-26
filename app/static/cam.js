@@ -757,7 +757,7 @@ const cut = { on: false, a: 0, b: 0 };     // on: "pick a stretch" mode (what ma
 const cutPanel = $("#cutPanel");
 const BYTES_PER_SEC = 150000;   // measured ~45 MB per 5 min of 1080p from the card
 const DL = window.Downloads || { jobs: [], capacity: null, started() {}, refresh() {}, on() {} };
-const fmtDur = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.round(s % 60); return h ? `${h} h ${m} min` : m ? `${m} min${x && m < 10 ? ` ${x} s` : ""}` : `${x} s`; };
+const fmtDur = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.round(s % 60); return h ? (m ? `${h} h ${m} min` : `${h} h`) : m ? `${m} min${x && m < 10 ? ` ${x} s` : ""}` : `${x} s`; };
 const fmtMB = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`;
 const footageIn = (lo, hi) => S.clips.reduce((n, c) => n + Math.max(0, Math.min(hi, c.end) - Math.max(lo, c.start)), 0);
 const hasSel = () => cut.a > 0 && cut.b > 0 && Math.abs(cut.b - cut.a) >= MIN_SEL;
@@ -775,14 +775,16 @@ function drawCut() {
   go.hidden = !ok; $("#cutZoom").hidden = !ok; note.textContent = ""; note.className = "small muted";
   if (ok) {
     const secs = footageIn(lo, hi), size = secs * BYTES_PER_SEC, room = roomFor();
+    // too long for one file, or more than the server's disk can hold right now (it saves the whole file
+    // before you get it): don't offer what it will refuse, offer the longest stretch from the same start that works
+    const tooLong = len > D.maxDownload, tooBig = room != null && secs > room;
     if (!secs) { go.hidden = true; note.textContent = "There's no footage on the card in that stretch."; }
-    else if (len > D.maxDownload) { go.hidden = true; note.textContent = `That's ${fmtDur(len)}. The limit is ${Math.round(D.maxDownload / 3600)} hours per file.`; }
     else if (S.privacy.some(([ps, pe]) => ps < hi && pe > lo)) { go.hidden = true; note.textContent = "That stretch includes privacy-mode time, which can't be downloaded."; }
-    // the server saves the whole file before you get it, and its disk is small: don't offer what it will refuse
-    else if (room != null && secs > room) { go.hidden = true;
-      if (room < 60) note.textContent = "The server has no room for more footage right now. Try again once your other downloads have finished.";
-      else { fit.hidden = false; fit.textContent = `Shorten to ${fmtDur(room)}`;
-        note.textContent = `That's ${fmtDur(secs)} of footage, but the server only has room for about ${fmtDur(room)} at a time right now. Shorten it, or download it in parts.`; } }
+    else if (tooBig && room < 60) { go.hidden = true; note.textContent = "The server has no room for more footage right now. Try again once your other downloads have finished."; }
+    else if (tooLong || tooBig) { go.hidden = true;
+      const end = fitEnd(lo, hi); fit.hidden = false; fit.textContent = `Shorten to ${fmtDur(footageIn(lo, end))}`;
+      note.textContent = tooBig ? `That's ${fmtDur(secs)} of footage, but the server only has room for about ${fmtDur(room)} at a time right now. Shorten it, or download it in parts.`
+        : `That's ${fmtDur(len)}. Downloads are up to ${fmtDur(D.maxDownload)} each, so shorten it or download it in parts.`; }
     else { go.textContent = `⬇ Download · ${fmtDur(secs)} · about ${fmtMB(size)}`;
       note.textContent = `The camera hands footage over at about playing speed, so this can take up to ${fmtDur(Math.max(60, secs))} to get ready. It then downloads by itself.`; }
   }
@@ -790,12 +792,17 @@ function drawCut() {
 }
 // seconds of footage the server can take now (a little under what it reports, so a borderline pick isn't refused)
 const roomFor = () => DL.capacity == null ? null : Math.floor(DL.capacity * 0.95);
-// keep the start, pull the end in until the footage inside fits
-function fitCut(secs) {
-  sortCut(); let left = secs, end = cut.a;
-  for (const c of S.clips) { const s = Math.max(cut.a, c.start), e = Math.min(cut.b, c.end); if (e <= s) continue;
-    if (e - s >= left) { end = s + left; break; } left -= e - s; end = e; }
-  cut.b = Math.floor(end); drawCut();
+// the furthest end from lo that the server will take: within the per-file limit, and no more
+// footage than it has room for (gaps in the footage don't count against the room)
+function fitEnd(lo, hi) {
+  let end = Math.min(hi, lo + D.maxDownload); const r = roomFor();
+  if (r != null && footageIn(lo, end) > r) {
+    let left = r, e2 = lo;
+    for (const c of S.clips) { const s = Math.max(lo, c.start), e = Math.min(end, c.end); if (e <= s) continue;
+      if (e - s >= left) { e2 = s + left; break; } left -= e - s; e2 = e; }
+    end = e2;
+  }
+  return Math.floor(end);
 }
 function setCut(on) { cut.on = on; if (!on) cut.a = cut.b = 0; drawCut(); }
 const playhead = () => Math.round(S.mode === "live" ? now() : S.t);
@@ -806,7 +813,7 @@ cutPanel.addEventListener("click", ev => { const b = ev.target.closest("button[d
   sortCut(); cut[k] = Math.min(now(), Math.max(S.from, cut[k] + +d)); drawCut(); });
 $("#cutCancel").addEventListener("click", () => setCut(false));
 $("#cutBtn").addEventListener("click", () => setCut(!(cut.on || (cut.a > 0 && cut.b > 0))));
-$("#cutFit").addEventListener("click", () => { const r = roomFor(); if (r) fitCut(r); });
+$("#cutFit").addEventListener("click", () => { sortCut(); cut.b = fitEnd(cut.a, cut.b); drawCut(); });
 $("#cutZoom").addEventListener("click", () => { const lo = Math.min(cut.a, cut.b), hi = Math.max(cut.a, cut.b), pad = (hi - lo) * 0.15; setView(lo - pad, hi + pad); });
 document.addEventListener("keydown", ev => { if (ev.key === "Escape" && (cut.on || cut.a) && $("#calModal").hidden) setCut(false); });
 async function startDownload(lo, hi, btn, fromSel) {
