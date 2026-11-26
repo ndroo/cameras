@@ -1502,7 +1502,8 @@ async def download_create(request: Request, cam_id: int, start: int = Form(...),
     room = _dl_free() - DL_RESERVE - _dl_reserved()
     if estimate > room:
         mins = max(0, int(room / DL_BYTES_PER_SEC / 60))
-        return JSONResponse({"ok": False, "error": f"Not enough room on the server for that much footage right now. Up to about {mins} minutes fits; pick a shorter stretch or wait for other downloads to clear."}, status_code=507)
+        return JSONResponse({"ok": False, "error": f"Not enough room on the server for that much footage right now. Up to about {mins} minutes fits; pick a shorter stretch or wait for other downloads to clear.",
+                             "capacity": max(0, int(room / DL_BYTES_PER_SEC))}, status_code=507)
     jid = secrets.token_urlsafe(9)
     j = {"id": jid, "cam_id": cam_id, "cam_name": cam["name"], "person": me["id"], "start": start, "end": end, "clips": clips,
          "state": "queued", "pct": 0, "bytes": 0, "estimate": estimate, "error": "", "note": "", "created": time.time(),
