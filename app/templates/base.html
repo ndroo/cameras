@@ -13,16 +13,16 @@
 <meta name="theme-color" content="#0f1115">
 {% if me %}<script src="/static/downloads.js?v={{ v }}" defer></script>{% endif %}
 </head>
-<body>
+<body{% if tv %} class="tv"{% endif %}>
 <div class="pbar" id="pbar"></div>
-<header class="top">
+<header class="top"{% if tv %} hidden{% endif %}>
   <span class="left">{% block back %}{% endblock %}<a href="/" class="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h13v9H3z"/><path d="M16 11l5-3v8l-5-3z"/></svg><span class="brandTxt">Cameras</span></a></span>
   <nav>
     {% if me %}
       <a href="/wall" class="{% if request.url.path == '/wall' %}on{% endif %}">Multi-view</a>
       <a href="/events" class="{% if request.url.path == '/events' %}on{% endif %}">Events</a>
       {% if me.is_admin %}<a href="/admin" class="{% if request.url.path.startswith('/admin') %}on{% endif %}">Admin</a>{% endif %}
-      <a href="/account" class="{% if request.url.path.startswith('/account') %}on{% endif %}" title="Signed in as {{ me.name }}">Account</a>
+      {% if not me.is_device %}<a href="/account" class="{% if request.url.path.startswith('/account') %}on{% endif %}" title="Signed in as {{ me.name }}">Account</a>{% endif %}
     {% endif %}
   </nav>
 </header>

@@ -7,6 +7,9 @@ let sel = new Set(CAMS.slice(0, 6).map(c => c.id)), cols = 0, order = CAMS.map(c
 // cameras not listed here are kept as they are rather than dropped
 try { const s = JSON.parse(localStorage.getItem("wall:sel")); if (Array.isArray(s)) sel = new Set(s.filter(id => Number.isInteger(id))); cols = +localStorage.getItem("wall:cols") || 0;
   const o = JSON.parse(localStorage.getItem("wall:order")); if (Array.isArray(o)) order = [...o.filter(id => Number.isInteger(id)), ...order.filter(id => !o.includes(id))]; } catch {}
+// the TV app (/wall?tv=1): every camera listed (the house it asked for), filling the screen, nothing saved
+const TV = wall.dataset.tv === "1";
+if (TV) { sel = new Set(CAMS.map(c => c.id)); cols = 0; order = CAMS.map(c => c.id); }
 const shownSel = () => CAMS.filter(c => sel.has(c.id)).length;
 const byOrder = (a, b) => order.indexOf(a.id) - order.indexOf(b.id);
 colsSel.value = String(cols);
@@ -44,7 +47,7 @@ back.addEventListener("click", () => openDrawer(false));
 $("#pickNone").addEventListener("click", () => { for (const c of CAMS) sel.delete(c.id); apply(); });
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") openDrawer(false); });
 search.value = "";
-function save() { try { localStorage.setItem("wall:sel", JSON.stringify([...sel])); localStorage.setItem("wall:cols", String(cols)); localStorage.setItem("wall:order", JSON.stringify(order)); } catch {} }
+function save() { if (TV) return; try { localStorage.setItem("wall:sel", JSON.stringify([...sel])); localStorage.setItem("wall:cols", String(cols)); localStorage.setItem("wall:order", JSON.stringify(order)); } catch {} }
 function bestCols(n, W, H) {
   // the column count that wastes the least screen for n 16:9 tiles
   let best = 1, bestArea = 0;
@@ -61,7 +64,7 @@ const tiles = new Map();
 function drawWall() {
   const chosen = CAMS.filter(c => sel.has(c.id)).sort(byOrder);
   $("#wallEmpty").hidden = chosen.length > 0;
-  const n = chosen.length, fs = !!document.fullscreenElement;
+  const n = chosen.length, fs = !!document.fullscreenElement || TV;
   wall.style.maxWidth = "";
   const w = wall.clientWidth || innerWidth;
   let auto = fs ? bestCols(n, innerWidth, innerHeight) : w < 640 ? (n > 1 ? 2 : 1) : n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;

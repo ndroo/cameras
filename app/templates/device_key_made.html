@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block title %}Device key · Cameras{% endblock %}
+{% block body %}
+<div class="card narrow">
+  <h1>Device key for {{ device.name }}</h1>
+  <p class="muted">Shown only this once. Put it in the device's app; it signs in by sending it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/device/login?next=/wall?house=cottage%26tv=1</code>. Anyone with the key can watch every camera, so keep it out of chats and links. Lost it? Make a new one under Admin → Devices.</p>
+  <input id="key" value="{{ key }}" readonly onclick="this.select()">
+  <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('key').value);this.textContent='Copied'">Copy key</button>
+  <p><a href="/admin#devices">Back to admin</a></p>
+</div>
+{% endblock %}

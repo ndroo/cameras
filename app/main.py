@@ -145,12 +145,16 @@ def current_person(request: Request):
     return s
 
 
-def require(request: Request, admin=False):
+def require(request: Request, admin=False, person=False):
+    """The signed-in person (else off to /login). admin: admins only. person: not a device (a TV has no
+    account, passcode or texts)."""
     p = current_person(request)
     if not p:
         raise HTTPException(status_code=303, headers={"Location": "/login?next=" + request.url.path})
     if admin and not p["is_admin"]:
         raise HTTPException(status_code=403, detail="Admins only")
+    if person and p["is_device"]:
+        raise HTTPException(status_code=403, detail="Not available on a device")
     return p
 
 
@@ -291,7 +295,7 @@ def _my_alert_groups(me):
 
 @app.get("/account", response_class=HTMLResponse)
 def account(request: Request, msg: str = "", err: str = ""):
-    me = require(request)
+    me = require(request, person=True)
     sessions = db.one("SELECT COUNT(*) n FROM sessions WHERE person_id=?", me["id"])["n"]
     groups = _my_alert_groups(me)
     # one row per kind of text, one column per group: None where that group doesn't send it
@@ -309,7 +313,7 @@ def account(request: Request, msg: str = "", err: str = ""):
 @app.post("/account/alerts")
 async def account_alerts(request: Request):
     """Each person chooses which of their groups' texts they get."""
-    me = require(request)
+    me = require(request, person=True)
     f = await request.form()
     for g in _my_alert_groups(me):
         offered = [k["kind"] for k in g["kinds"]]
@@ -324,7 +328,7 @@ async def account_alerts(request: Request):
 
 @app.post("/account/passcode")
 def account_passcode(request: Request, passcode: str = Form(""), passcode2: str = Form(""), clear: str = Form("")):
-    me = require(request)
+    me = require(request, person=True)
     if clear:
         db.run("UPDATE people SET passcode_hash=NULL WHERE id=?", me["id"])
         return RedirectResponse("/account?msg=Passcode+removed", status_code=303)
@@ -338,7 +342,7 @@ def account_passcode(request: Request, passcode: str = Form(""), passcode2: str 
 
 @app.post("/account/signout-everywhere")
 def signout_everywhere(request: Request):
-    me = require(request)
+    me = require(request, person=True)
     db.run("DELETE FROM sessions WHERE person_id=?", me["id"])
     r = RedirectResponse("/login", status_code=303); r.delete_cookie("s")
     return r
@@ -383,6 +387,40 @@ def login_link_use(request: Request, tok: str):
     return _start_session(request, person, "/")
 
 
+def _key_hash(key):
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _safe_next(nxt):
+    """A same-site path to go on to after signing in ("//host" and "/\\host" would leave the site)."""
+    return nxt if nxt.startswith("/") and not nxt.startswith(("//", "/\\")) else "/"
+
+
+@app.get("/device/login")
+def device_login(request: Request, next: str = "/"):
+    """A device (a TV: Admin -> Devices) signs in with its key, sent as "Authorization: Bearer <key>"
+    so it never sits in a URL, a history or a log. It gets the usual session cookie and goes on to
+    next. A device sees every camera at every house and can't change anything."""
+    auth = request.headers.get("authorization", "")
+    key = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    ident = "key:" + (request.client.host if request.client else "?")
+    if _locked(ident):
+        raise HTTPException(429, "Too many tries. Wait 15 minutes.")
+    dev = db.one("SELECT * FROM people WHERE is_device=1 AND key_hash=?", _key_hash(key)) if len(key) >= 20 else None
+    if not dev:
+        _fail(ident)
+        raise HTTPException(401, "That device key isn't valid. It may have been replaced or the device removed (Admin -> Devices).")
+    nxt = _safe_next(next)
+    me = current_person(request)
+    if me and me["id"] == dev["id"]:      # already signed in on this screen: don't pile up sessions
+        return RedirectResponse(nxt, status_code=303)
+    # a device keeps its newest few sessions (one per screen it's on), not one per app launch
+    db.run("DELETE FROM sessions WHERE person_id=? AND token NOT IN "
+           "(SELECT token FROM sessions WHERE person_id=? ORDER BY created DESC LIMIT 2)", dev["id"], dev["id"])
+    db.run("DELETE FROM login_fails WHERE ident=?", ident)
+    return _start_session(request, dev, nxt)
+
+
 @app.get("/logout")
 def logout(request: Request):
     tok = request.cookies.get("s")
@@ -395,14 +433,17 @@ def logout(request: Request):
 
 # ------------------------------------------------------------------ pages
 def _house_filter(request, cams):
-    """The house picked in the filter bar (?house=<id>|all, remembered in a cookie), the houses
+    """The house picked in the filter bar (?house=<id>|<slug>|all, remembered in a cookie), the houses
     this person can see, and the cameras narrowed to the pick. Returns (pick, houses, cams, set_cookie)."""
-    houses, seen = [], set()
+    houses, seen, slugs = [], set(), {}
     for c in cams:
         if c["house_id"] and c["house_id"] not in seen:
             seen.add(c["house_id"]); houses.append({"id": c["house_id"], "name": c["house_name"]})
+            if c["house_slug"]:
+                slugs[c["house_slug"]] = str(c["house_id"])
     q = request.query_params.get("house")
     raw = q if q is not None else request.cookies.get("house", "all")
+    raw = slugs.get(raw, raw)     # ?house=cottage, as the TV app asks
     pick = int(raw) if raw.isdigit() and int(raw) in seen else None
     if len(houses) < 2:
         pick = None
@@ -468,7 +509,9 @@ def wall(request: Request):
              "flipV": c["flip_v"], "thumbAt": int(c["thumb_at"] or 0), "private": bool(db.privacy_active(c["id"])),
              "sd": sd_info(c),
              "opener": ({"id": openers[c["id"]]["id"], "name": openers[c["id"]]["name"]} if c["id"] in openers else None)} for c in rows]
-    r = render(request, "wall.html", me=me, data=json.dumps(cams), house_pick=pick, house_list=house_list)
+    # ?tv=1 (the TV app): no header or tools, every camera in the pick, the whole screen
+    tv = request.query_params.get("tv") == "1"
+    r = render(request, "wall.html", me=me, data=json.dumps(cams), house_pick=pick, house_list=house_list, tv=tv)
     return _remember_house(r, pick) if setc else r
 
 
@@ -522,7 +565,7 @@ def _alerts_target(request, me, cam_id, person_id):
 
 @app.get("/cam/{cam_id}/alerts.json")
 def cam_alerts_get(request: Request, cam_id: int):
-    me = require(request)
+    me = require(request, person=True)
     if not db.can_view(me, cam_id):
         raise HTTPException(404)
     cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
@@ -544,7 +587,7 @@ def cam_alerts_get(request: Request, cam_id: int):
 
 @app.post("/cam/{cam_id}/alerts")
 async def cam_alerts_set(request: Request, cam_id: int):
-    me = require(request)
+    me = require(request, person=True)
     if not db.can_view(me, cam_id):
         raise HTTPException(404)
     form = await request.form()
@@ -562,7 +605,7 @@ async def cam_alerts_set(request: Request, cam_id: int):
 
 @app.post("/account/alert-via")
 async def account_alert_via(request: Request, via: str = Form("text")):
-    me = require(request)
+    me = require(request, person=True)
     if via not in ("text", "email", "both"):
         raise HTTPException(400)
     db.run("UPDATE people SET alert_via=? WHERE id=?", via, me["id"])
@@ -2157,7 +2200,8 @@ def admin(request: Request, msg: str = ""):
     me = require(request, admin=True)
     houses = db.q("SELECT * FROM houses ORDER BY sort, name")
     cams = db.q("SELECT c.*, h.name AS house_name FROM cameras c LEFT JOIN houses h ON h.id=c.house_id ORDER BY h.sort, h.name, c.sort, c.name")
-    people = db.q("SELECT * FROM people ORDER BY is_admin DESC, name")
+    people = db.q("SELECT * FROM people WHERE COALESCE(is_device,0)=0 ORDER BY is_admin DESC, name")
+    devices = db.q("SELECT * FROM people WHERE is_device=1 ORDER BY name")
     groups = db.q("SELECT g.*, h.name AS house_name FROM groups g JOIN houses h ON h.id=g.house_id ORDER BY h.sort, h.name, g.name")
     members, roster = {}, {}
     for r in db.q("SELECT gm.group_id, gm.muted, p.id, p.name FROM group_members gm JOIN people p ON p.id=gm.person_id ORDER BY p.name"):
@@ -2184,7 +2228,8 @@ def admin(request: Request, msg: str = ""):
         lcd = None
     return render(request, "admin.html", houses=houses, cams=cams, people=people, groups=groups, members=members,
                   roster=roster, alert_kinds=ALERT_LABELS, alert_help=ALERT_HELP, gcams=gcams, member_ids=member_ids, gcam_ids=gcam_ids, msg=msg, me=me, mqtt_ok=mq.connected if mq else False, recent_sms=recent_sms,
-                  heating=_heating_state, heating_every=HEATING_EVERY // 60, watch=watch, backup=backup, lcd=lcd, openers=openers)
+                  heating=_heating_state, heating_every=HEATING_EVERY // 60, watch=watch, backup=backup, lcd=lcd, openers=openers,
+                  devices=devices)
 
 
 @app.post("/admin/house")
@@ -2281,6 +2326,40 @@ def admin_person_link(request: Request, person_id: int):
     db.kv_set(_link_key(tok), json.dumps({"person_id": person_id, "expires": time.time() + 86400}))
     base = os.environ.get("BASE_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
     return render(request, "login_link_made.html", person=person, url=f"{base}/l/{tok}")
+
+
+def _new_device_key(device_id):
+    """A fresh key for a device; the old one (and every screen signed in with it) stops working."""
+    key = "cdk_" + secrets.token_urlsafe(32)
+    db.run("UPDATE people SET key_hash=? WHERE id=? AND is_device=1", _key_hash(key), device_id)
+    db.run("DELETE FROM sessions WHERE person_id=?", device_id)
+    return key
+
+
+@app.post("/admin/device")
+def admin_device(request: Request, name: str = Form(...)):
+    """Add a device (a TV): view-only, every camera, signs in with a key shown once."""
+    require(request, admin=True)
+    did = db.run("INSERT INTO people(name,phone,is_admin,is_device,view_all,created) VALUES(?,?,0,1,1,?)",
+                 name.strip() or "TV", "device:" + secrets.token_hex(8), time.time())
+    return render(request, "device_key_made.html", device=db.one("SELECT * FROM people WHERE id=?", did),
+                  key=_new_device_key(did))
+
+
+@app.post("/admin/device/{device_id}/key")
+def admin_device_key(request: Request, device_id: int):
+    require(request, admin=True)
+    dev = db.one("SELECT * FROM people WHERE id=? AND is_device=1", device_id)
+    if not dev:
+        raise HTTPException(404)
+    return render(request, "device_key_made.html", device=dev, key=_new_device_key(device_id))
+
+
+@app.post("/admin/device/{device_id}/delete")
+def admin_device_delete(request: Request, device_id: int):
+    require(request, admin=True)
+    db.run("DELETE FROM people WHERE id=? AND is_device=1", device_id)     # its sessions go with it
+    return RedirectResponse("/admin#devices", status_code=303)
 
 
 @app.post("/admin/group")

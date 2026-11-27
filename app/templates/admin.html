@@ -4,7 +4,7 @@
 {% if msg %}<p class="notice">{{ msg }}</p>{% endif %}
 <div class="adminLayout">
 <nav class="adminNav" id="adminNav" aria-label="Admin sections">
-  <a href="#cameras">Cameras</a><a href="#garage">Garage</a><a href="#people">People</a><a href="#groups">Groups</a><a href="#houses">Houses</a><a href="#system">System</a><a href="#texts">Recent texts</a>
+  <a href="#cameras">Cameras</a><a href="#garage">Garage</a><a href="#people">People</a><a href="#devices">Devices</a><a href="#groups">Groups</a><a href="#houses">Houses</a><a href="#system">System</a><a href="#texts">Recent texts</a>
 </nav>
 <div class="adminBody">
 
@@ -93,6 +93,28 @@
     </form></tr>
   </table>
   <p class="muted small">Admins see every camera and can change everything, including turning on privacy mode (🔒 on a camera) for 1-24 hours. Everyone else only sees what their groups allow. People sign in with a code texted to their mobile or emailed to them, or with their passcode (they can set their own under Account; you can set one here too). If someone is stuck, <b>Link</b> makes a one-time sign-in link (24 hours) you can send them.</p>
+</section>
+
+<section class="card" id="devices">
+  <h2>Devices</h2>
+  <table class="tbl">
+    <tr><th>Name</th><th>Last seen</th><th>Added</th><th></th></tr>
+    {% for d in devices %}
+    <tr>
+      <td>{{ d.name }}</td>
+      <td class="muted small">{{ d.last_seen|ago }}</td>
+      <td class="muted small">{{ d.created|ago }}</td>
+      <td class="nowrap">
+        <form method="post" action="/admin/device/{{ d.id }}/key" style="display:inline"><button class="secondary small" onclick="return confirm('Make a new key for {{ d.name }}? The old key stops working at once; the new one has to go into its app.')">New key</button></form>
+        <form method="post" action="/admin/device/{{ d.id }}/delete" style="display:inline"><button class="danger small" onclick="return confirm('Remove {{ d.name }}? It is signed out at once.')">✕</button></form>
+      </td>
+    </tr>
+    {% endfor %}
+    <tr><form method="post" action="/admin/device">
+      <td><input name="name" placeholder="e.g. Living room TV" required></td><td></td><td></td><td><button class="small">Add</button></td>
+    </form></tr>
+  </table>
+  <p class="muted small">A TV or other screen with no phone. Its app signs in with a device key (never typed, never in a link), and it sees every camera at every house but can't change anything: no camera controls, privacy mode, garage doors, admin or texts. <b>New key</b> replaces the key and signs it out everywhere; ✕ removes it.</p>
 </section>
 
 <section class="card" id="groups">
