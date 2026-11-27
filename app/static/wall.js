@@ -224,12 +224,15 @@ document.addEventListener("fullscreenchange", () => { wall.classList.remove("act
 // ?live=N for a TV that can decode more. Only 2 relays run on the server instead of one per camera.
 let tvPicked = null, tvSolo = null, tvTurn = 0;
 const TV_LIVE = Math.max(1, Math.min(4, +new URLSearchParams(location.search).get("live") || 2));
-const TV_TURN_MS = 20000, TV_START_MS = 15000;
+const TV_TURN_MS = 20000, TV_START_MS = 15000, TV_FREE_MS = 1500, TV_SIT_OUT_MS = 30000;
+let tvFreeAt = 0, tvStartT = 0, tvFocusT = 0;
+const tvLive = () => [...tiles.values()].filter(t => t.live).length;
 const tvList = () => CAMS.filter(c => sel.has(c.id) && !c.private).sort(byOrder).map(c => tiles.get(c.id)).filter(Boolean);
 function tvTile(t) {
   t.badge = document.createElement("span"); t.badge.className = "tvBadge"; t.el.querySelector(".stage").appendChild(t.badge);
   t.el.tabIndex = 0;
-  t.el.addEventListener("focus", () => { tvPicked = t; tvPlan(); });
+  t.el.addEventListener("focus", () => { tvPicked = t; clearTimeout(tvFocusT); tvFocusT = setTimeout(tvPlan, 500); });   // arrowing across tiles doesn't start each one
+  t.vs.RECONNECT_TIMEOUT = 864e5;   // the player's own retries would fight the turns for decoders; tvPlan restarts tiles
   t.el.addEventListener("keydown", ev => { if (ev.key === "Enter" && !tvSolo) { ev.preventDefault(); tvSoloOn(t); } });
   tvDraw(t);
 }
@@ -240,7 +243,7 @@ function tvDraw(t) {
   t.badge.textContent = t.c.private ? "Privacy mode" : t.live ? (t.playing ? "Live" : "Connecting…") : tvAgo(t.stillAt);
 }
 function tvStart(t) {
-  if (t.live) return;
+  if (t.live || tvLive() >= TV_LIVE) return;
   t.live = true; t.playing = false; t.startedAt = Date.now();
   t.vs.src = `/stream/${t.c.id}/ws`;
   tvDraw(t);
@@ -255,7 +258,10 @@ function tvStop(t) {
       t.poster.src = cv.toDataURL("image/jpeg", 0.85); t.stillAt = Date.now(); } catch {}
   }
   t.poster.style.opacity = "1";
-  t.vs.ondisconnect();                          // closes the socket and frees the decoder
+  t.vs.ondisconnect();                          // closes the socket
+  const vv = t.vs.video;                         // and makes the browser let go of the decoder now, not when it gets round to it
+  if (vv) { try { vv.pause(); vv.removeAttribute("src"); vv.srcObject = null; vv.load(); } catch {} }
+  tvFreeAt = Date.now() + TV_FREE_MS;
   t.live = false; t.playing = false;
   tvDraw(t);
 }
@@ -266,14 +272,16 @@ function tvPlan() {
   if (tvSolo) want = [tvSolo];
   else {
     want = tvPicked && all.includes(tvPicked) ? [tvPicked] : [];
+    const now = Date.now();
     for (let i = 0; want.length < Math.min(TV_LIVE, all.length) && i < all.length; i++) {
-      const t = all[(tvTurn + i) % all.length]; if (!want.includes(t)) want.push(t);
+      const t = all[(tvTurn + i) % all.length];
+      if (!want.includes(t) && !(t.failedAt && now - t.failedAt < TV_SIT_OUT_MS)) want.push(t);   // just failed: sit a turn out
     }
   }
-  const stopping = all.filter(t => t.live && !want.includes(t));
-  stopping.forEach(tvStop);
-  // a decoder takes a moment to come free; starting before then fails on the TV
-  setTimeout(() => want.forEach(tvStart), stopping.length ? 700 : 0);
+  all.filter(t => t.live && !want.includes(t)).forEach(tvStop);
+  // a decoder takes a moment to come free; starting before then is refused on the TV
+  clearTimeout(tvStartT);
+  tvStartT = setTimeout(() => want.forEach(tvStart), Math.max(0, tvFreeAt - Date.now()));
 }
 function tvSoloOn(t) {
   tvSolo = t; wall.classList.add("solo"); t.el.classList.add("soloTile");
@@ -290,10 +298,15 @@ if (TV) {
   tvPlan();
   setInterval(() => {               // turns, and a tile that hasn't started in time waits for its next one
     const now = Date.now();
+    let freed = false;
     for (const t of tiles.values()) {
-      if (t.live && !t.playing && now - t.startedAt > TV_START_MS && t !== tvSolo && t !== tvPicked) tvStop(t);
+      const vs = t.vs, gone = !vs.ws && !vs.pc;   // the player gave up on its connection
+      if (t.live && ((!t.playing && now - t.startedAt > TV_START_MS) || (t.playing && gone))) {
+        t.failedAt = now; tvStop(t); freed = true;   // keeps its last frame; another tile gets the slot
+      }
       tvDraw(t);
     }
+    if (freed) tvPlan();
   }, 1000);
   setInterval(() => { if (tvSolo) return; tvTurn += Math.max(1, TV_LIVE - (tvPicked ? 1 : 0)); tvPlan(); }, TV_TURN_MS);
 }
