@@ -1011,6 +1011,13 @@ async def frame(request: Request, cam_id: int):
 WALL_FPS = os.environ.get("WALL_FPS", "5")
 
 
+def _end(proc):
+    """Kill a stream's ffmpeg and reap it (a killed child nobody waits for stays as a zombie process)."""
+    try: proc.kill()
+    except Exception: pass
+    threading.Thread(target=proc.wait, daemon=True).start()
+
+
 @app.get("/stream/{cam_id}/wall.mjpeg")
 async def wall_mjpeg(request: Request, cam_id: int):
     """The camera's low-res (VGA) stream as MJPEG, WALL_FPS pictures a second, for the TV's multi-view
@@ -1029,9 +1036,13 @@ async def wall_mjpeg(request: Request, cam_id: int):
         url, tok = mq.request_relay(cam["device_id"], resolution="VGA")
         sock = tapo.connect_relay(url, tok, cloud.term)
         tapo.start_preview(sock, "VGA")
-        proc = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-probesize", "300000", "-analyzeduration", "1000000",   # first picture quickly
-                                 "-f", "mpegts", "-i", "pipe:0",
-                                 "-an", "-vf", f"fps={WALL_FPS},format=yuvj420p",   # JPEG wants full-range colour
+        # The cameras' "VGA" stream is really 1280x720 (960 tall on a doorbell), so decoding it is most of the
+        # cost: one thread (each holds its own frame buffers), no deblocking and fast mode, which only matter
+        # at full size. Pictures are shrunk to 640 wide (a tile is ~320) and made 5 a second.
+        proc = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-threads", "1", "-skip_loop_filter", "all", "-flags2", "fast",
+                                 "-probesize", "300000", "-analyzeduration", "1000000",   # first picture quickly
+                                 "-f", "mpegts", "-i", "pipe:0", "-an",
+                                 "-vf", f"fps={WALL_FPS},scale=640:-2:flags=fast_bilinear,format=yuvj420p",   # JPEG wants full-range colour
                                  "-q:v", "7", "-f", "mpjpeg", "-boundary_tag", "frame",
                                  "pipe:1"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
@@ -1061,8 +1072,7 @@ async def wall_mjpeg(request: Request, cam_id: int):
                     break
                 yield data
         finally:
-            try: proc.kill()
-            except Exception: pass
+            _end(proc)
             try: sock.shutdown(socket.SHUT_RDWR)    # wakes the feed thread blocked reading the relay
             except Exception: pass
             try: sock.close()
@@ -1137,8 +1147,7 @@ async def internal_live(request: Request, cam_id: int):
                 yield data
         finally:
             if proc:
-                try: proc.kill()
-                except Exception: pass
+                _end(proc)
             try: sock.shutdown(socket.SHUT_RDWR)    # wakes the pump thread blocked reading the relay
             except Exception: pass
             try: sock.close()
