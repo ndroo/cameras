@@ -11,7 +11,7 @@
 {% if tv %}<nav class="tvSide" aria-label="Properties">
   <div class="tvSideHead">Cameras</div>
   {% for h in house_list %}<a href="/wall?house={{ h.id }}&amp;tv=1" class="{% if h.id == house_pick %}on{% endif %}">{{ h.name }}</a>{% endfor %}
-  <div class="tvSideHint">OK on a camera: full screen<br>Back: menu</div>
+  <div class="tvSideHint">OK on a camera: full screen<br>Back: exit</div>
 </nav>{% endif %}
 <div class="wall" id="wall"{% if tv %} data-tv="1"{% endif %}></div>
 <p class="muted small" id="wallEmpty" hidden>No cameras chosen. Use "Choose cameras" above.</p>
