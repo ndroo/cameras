@@ -9,6 +9,7 @@ try { const s = JSON.parse(localStorage.getItem("wall:sel")); if (Array.isArray(
   const o = JSON.parse(localStorage.getItem("wall:order")); if (Array.isArray(o)) order = [...o.filter(id => Number.isInteger(id)), ...order.filter(id => !o.includes(id))]; } catch {}
 // the TV app (/wall?tv=1): every camera listed (the house it asked for), filling the screen, nothing saved
 const TV = wall.dataset.tv === "1";
+const BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 if (TV) { sel = new Set(CAMS.map(c => c.id)); cols = 0; order = CAMS.map(c => c.id); }
 const shownSel = () => CAMS.filter(c => sel.has(c.id)).length;
 const byOrder = (a, b) => order.indexOf(a.id) - order.indexOf(b.id);
@@ -94,15 +95,15 @@ function drawWall() {
     const paintAmb = now => { const vv = vs.video; if (vv && vv.readyState >= 2 && now - lastAmb > 250) { lastAmb = now; try { actx.drawImage(vv, 0, 0, amb.width, amb.height); amb.style.opacity = "1"; } catch {} } if (tiles.has(c.id)) requestAnimationFrame(paintAmb); };
     requestAnimationFrame(paintAmb);
     const lay = () => { for (const x of [vs, poster]) applyToBox(stage, x, c.rotate, c.flipH, c.flipV); };
-    const shown = () => { poster.style.opacity = "0"; hint.style.display = "none"; };
+    const shown = () => { poster.style.opacity = "0"; hint.style.display = "none"; const t = tiles.get(c.id); if (t && TV && t.live && !t.playing) { t.playing = true; tvDraw(t); } };
     const v = vs.video;
-    if (v) { v.muted = true; v.controls = false; v.setAttribute("playsinline", "");
+    if (v) { v.muted = true; v.controls = false; v.setAttribute("playsinline", ""); if (TV) v.poster = BLANK;   // no big grey play icon on Android TV
       v.addEventListener("playing", shown); v.addEventListener("timeupdate", () => { if (v.currentTime > 0) shown(); });
       v.addEventListener("waiting", () => { hint.style.display = ""; hint.innerHTML = '<i class="spin"></i>Reconnecting…'; }); }
     // belt and braces: some modes never fire "playing" on the inner element
     const poll = setInterval(() => { const vv = vs.video; if (vv && vv.readyState >= 3 && !vv.paused && vv.currentTime > 0) { shown(); } if (!tiles.has(c.id)) clearInterval(poll); }, 500);
     if (c.private) { hint.textContent = "🔒 Privacy mode"; poster.style.opacity = "1"; }
-    else vs.src = `/stream/${c.id}/ws`;
+    else if (!TV) vs.src = `/stream/${c.id}/ws`;   // TV: tvPlan() decides which tiles play
     // click a tile to hear it (each tile toggles on its own; all start muted)
     const snd = el.querySelector(".snd");
     const drawSnd = () => { const vv = vs.video, on = !!vv && !vv.muted; snd.hidden = !on; el.classList.toggle("sound", on); el.title = on ? "Click to mute" : "Click for sound"; };
@@ -132,7 +133,8 @@ function drawWall() {
         setTimeout(() => { gbtn.classList.remove("ok", "bad"); gbtn.textContent = "🚪"; gbusy = false; }, 2500);
       });
     }
-    tiles.set(c.id, { el, vs, lay }); lay(); enableDrag(el);
+    tiles.set(c.id, { el, vs, lay, c, poster, stillAt: (c.thumbAt || 0) * 1000, live: false, playing: false }); lay(); enableDrag(el);
+    if (TV) tvTile(tiles.get(c.id));
     new ResizeObserver(lay).observe(stage);
   }
 }
@@ -213,3 +215,85 @@ document.addEventListener("fullscreenchange", () => { drawWall(); setTimeout(() 
 let idleT = null;
 document.addEventListener("mousemove", () => { if (!document.fullscreenElement) return; wall.classList.add("active"); clearTimeout(idleT); idleT = setTimeout(() => wall.classList.remove("active"), 2500); });
 document.addEventListener("fullscreenchange", () => { wall.classList.remove("active"); });
+
+// ---------------------------------------------------------------- TV: only so many live videos at once
+// A TV decodes a fixed number of videos at a time (the living room TCL: 2; a third fails, and the player then
+// retries forever). So every camera shows its latest picture, TV_LIVE of them play live and they take turns;
+// a tile leaving its turn keeps its last frame, so no picture is old for long. The remote's arrows pick a tile
+// (it goes live and stays live); OK fills the screen with it; Back (the app calls tvBack()) returns to the grid.
+// ?live=N for a TV that can decode more. Only 2 relays run on the server instead of one per camera.
+let tvPicked = null, tvSolo = null, tvTurn = 0;
+const TV_LIVE = Math.max(1, Math.min(4, +new URLSearchParams(location.search).get("live") || 2));
+const TV_TURN_MS = 20000, TV_START_MS = 15000;
+const tvList = () => CAMS.filter(c => sel.has(c.id) && !c.private).sort(byOrder).map(c => tiles.get(c.id)).filter(Boolean);
+function tvTile(t) {
+  t.badge = document.createElement("span"); t.badge.className = "tvBadge"; t.el.querySelector(".stage").appendChild(t.badge);
+  t.el.tabIndex = 0;
+  t.el.addEventListener("focus", () => { tvPicked = t; tvPlan(); });
+  t.el.addEventListener("keydown", ev => { if (ev.key === "Enter" && !tvSolo) { ev.preventDefault(); tvSoloOn(t); } });
+  tvDraw(t);
+}
+function tvAgo(ms) { const s = Math.max(0, (Date.now() - ms) / 1000); return !ms ? "" : s < 60 ? `${Math.round(s)} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; }
+function tvDraw(t) {
+  if (!t.badge) return;
+  t.badge.classList.toggle("live", t.live && t.playing);
+  t.badge.textContent = t.c.private ? "Privacy mode" : t.live ? (t.playing ? "Live" : "Connecting…") : tvAgo(t.stillAt);
+}
+function tvStart(t) {
+  if (t.live) return;
+  t.live = true; t.playing = false; t.startedAt = Date.now();
+  t.vs.src = `/stream/${t.c.id}/ws`;
+  tvDraw(t);
+}
+function tvStop(t) {
+  if (!t.live) return;
+  const v = t.vs.video;
+  if (t.playing && v && v.videoWidth) {        // keep its last frame as the still
+    try { const cv = document.createElement("canvas"), k = Math.min(1, 960 / v.videoWidth);
+      cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
+      cv.getContext("2d").drawImage(v, 0, 0, cv.width, cv.height);
+      t.poster.src = cv.toDataURL("image/jpeg", 0.85); t.stillAt = Date.now(); } catch {}
+  }
+  t.poster.style.opacity = "1";
+  t.vs.ondisconnect();                          // closes the socket and frees the decoder
+  t.live = false; t.playing = false;
+  tvDraw(t);
+}
+// Which tiles should play now: the solo tile; else the picked one plus the tiles whose turn it is.
+function tvPlan() {
+  const all = tvList(); if (!all.length) return;
+  let want;
+  if (tvSolo) want = [tvSolo];
+  else {
+    want = tvPicked && all.includes(tvPicked) ? [tvPicked] : [];
+    for (let i = 0; want.length < Math.min(TV_LIVE, all.length) && i < all.length; i++) {
+      const t = all[(tvTurn + i) % all.length]; if (!want.includes(t)) want.push(t);
+    }
+  }
+  const stopping = all.filter(t => t.live && !want.includes(t));
+  stopping.forEach(tvStop);
+  // a decoder takes a moment to come free; starting before then fails on the TV
+  setTimeout(() => want.forEach(tvStart), stopping.length ? 700 : 0);
+}
+function tvSoloOn(t) {
+  tvSolo = t; wall.classList.add("solo"); t.el.classList.add("soloTile");
+  tvPlan(); setTimeout(() => { const v = t.vs.video; if (v) { v.muted = false; v.play().catch(() => {}); } t.lay(); }, 800);
+}
+window.tvBack = () => {           // the TV app asks first on Back: true = handled here
+  if (!tvSolo) return false;
+  const t = tvSolo; tvSolo = null; const v = t.vs.video; if (v) v.muted = true;
+  wall.classList.remove("solo"); t.el.classList.remove("soloTile"); t.el.focus(); tvPlan();
+  setTimeout(() => { for (const x of tiles.values()) x.lay(); }, 50);
+  return true;
+};
+if (TV) {
+  tvPlan();
+  setInterval(() => {               // turns, and a tile that hasn't started in time waits for its next one
+    const now = Date.now();
+    for (const t of tiles.values()) {
+      if (t.live && !t.playing && now - t.startedAt > TV_START_MS && t !== tvSolo && t !== tvPicked) tvStop(t);
+      tvDraw(t);
+    }
+  }, 1000);
+  setInterval(() => { if (tvSolo) return; tvTurn += Math.max(1, TV_LIVE - (tvPicked ? 1 : 0)); tvPlan(); }, TV_TURN_MS);
+}
