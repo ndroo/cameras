@@ -573,3 +573,12 @@ body.tv .wallTile{border:0;border-radius:0;height:100%;box-shadow:none}
 body.tv .wallTile .stage{aspect-ratio:auto;height:100%}
 body.tv .wallTile .tag{padding:14px 12px 8px;font-size:15px}
 body.tv .wallTile .tag .open,body.tv .wallTile .tag .grip,body.tv .wallTile .tag .garageTile{display:none}
+body.tv .wallTile .stage .poster{opacity:1}
+body.tv .wallTile .spinner{display:none}
+body.tv .wallTile:focus{outline:4px solid var(--acc);outline-offset:-4px}
+body.tv .tvBadge{position:absolute;top:10px;right:10px;z-index:2;padding:4px 10px;border-radius:999px;background:rgba(0,0,0,.6);color:rgba(255,255,255,.85);font-size:14px;font-weight:600;pointer-events:none}
+body.tv .tvBadge:empty{display:none}
+body.tv .tvBadge.live{color:#fff}
+body.tv .tvBadge.live::before{content:"";display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:#ef4444;vertical-align:1px}
+body.tv .wall.solo{grid-template-columns:1fr !important;grid-auto-rows:1fr}
+body.tv .wall.solo .wallTile:not(.soloTile){display:none}
