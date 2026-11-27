@@ -68,7 +68,7 @@ function drawWall() {
   const n = chosen.length, fs = !!document.fullscreenElement || TV;
   wall.style.maxWidth = "";
   const w = wall.clientWidth || innerWidth;
-  let auto = fs ? bestCols(n, innerWidth, innerHeight) : w < 640 ? (n > 1 ? 2 : 1) : n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  let auto = fs ? bestCols(n, TV ? wall.clientWidth || innerWidth : innerWidth, TV ? wall.clientHeight || innerHeight : innerHeight) : w < 640 ? (n > 1 ? 2 : 1) : n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
   // big window with columns on auto: size the tiles so the whole wall shows without scrolling
   if (!fs && !cols && n && w >= 1100) {
     const gap = parseFloat(getComputedStyle(wall).columnGap) || 10, room = innerHeight - (wall.getBoundingClientRect().top + scrollY) - 32;
@@ -94,8 +94,8 @@ function drawWall() {
     const actx = amb.getContext("2d", { alpha: false }); let lastAmb = 0;
     const paintAmb = now => { const vv = vs.video; if (vv && vv.readyState >= 2 && now - lastAmb > 250) { lastAmb = now; try { actx.drawImage(vv, 0, 0, amb.width, amb.height); amb.style.opacity = "1"; } catch {} } if (tiles.has(c.id)) requestAnimationFrame(paintAmb); };
     requestAnimationFrame(paintAmb);
-    const lay = () => { for (const x of [vs, poster]) applyToBox(stage, x, c.rotate, c.flipH, c.flipV); };
-    const shown = () => { poster.style.opacity = "0"; hint.style.display = "none"; const t = tiles.get(c.id); if (t && TV && t.live && !t.playing) { t.playing = true; tvDraw(t); } };
+    const lay = () => { for (const x of [vs, poster, stage.querySelector("img.mjpeg")]) if (x) applyToBox(stage, x, c.rotate, c.flipH, c.flipV); };
+    const shown = () => { poster.style.opacity = "0"; hint.style.display = "none"; };
     const v = vs.video;
     if (v) { v.muted = true; v.controls = false; v.setAttribute("playsinline", ""); if (TV) v.poster = BLANK;   // no big grey play icon on Android TV
       v.addEventListener("playing", shown); v.addEventListener("timeupdate", () => { if (v.currentTime > 0) shown(); });
@@ -103,13 +103,13 @@ function drawWall() {
     // belt and braces: some modes never fire "playing" on the inner element
     const poll = setInterval(() => { const vv = vs.video; if (vv && vv.readyState >= 3 && !vv.paused && vv.currentTime > 0) { shown(); } if (!tiles.has(c.id)) clearInterval(poll); }, 500);
     if (c.private) { hint.textContent = "🔒 Privacy mode"; poster.style.opacity = "1"; }
-    else if (!TV) vs.src = `/stream/${c.id}/ws`;   // TV: tvPlan() decides which tiles play
+    else if (!TV) vs.src = `/stream/${c.id}/ws`;   // TV: the tile shows /wall.mjpeg pictures instead (tvTile)
     // click a tile to hear it (each tile toggles on its own; all start muted)
     const snd = el.querySelector(".snd");
     const drawSnd = () => { const vv = vs.video, on = !!vv && !vv.muted; snd.hidden = !on; el.classList.toggle("sound", on); el.title = on ? "Click to mute" : "Click for sound"; };
     if (v) v.addEventListener("volumechange", drawSnd);
     el.addEventListener("click", ev => {
-      if (el.dataset.dragged || ev.target.closest(".open,.grip,.garageTile")) return;
+      if (TV || el.dataset.dragged || ev.target.closest(".open,.grip,.garageTile")) return;   // TV: OK opens full screen instead
       const vv = vs.video; if (!vv) return;
       let lvl = 0.8; try { const x = parseFloat(localStorage.getItem("vol")); if (x > 0 && x <= 1) lvl = x; } catch {}   // the camera page's volume
       vv.volume = lvl; vv.muted = !vv.muted; if (!vv.muted) vv.play().catch(() => {});
@@ -133,7 +133,7 @@ function drawWall() {
         setTimeout(() => { gbtn.classList.remove("ok", "bad"); gbtn.textContent = "🚪"; gbusy = false; }, 2500);
       });
     }
-    tiles.set(c.id, { el, vs, lay, c, poster, stillAt: (c.thumbAt || 0) * 1000, live: false, playing: false }); lay(); enableDrag(el);
+    tiles.set(c.id, { el, vs, lay, c, poster, playing: false }); lay(); enableDrag(el);
     if (TV) tvTile(tiles.get(c.id));
     new ResizeObserver(lay).observe(stage);
   }
@@ -216,84 +216,85 @@ let idleT = null;
 document.addEventListener("mousemove", () => { if (!document.fullscreenElement) return; wall.classList.add("active"); clearTimeout(idleT); idleT = setTimeout(() => wall.classList.remove("active"), 2500); });
 document.addEventListener("fullscreenchange", () => { wall.classList.remove("active"); });
 
-// ---------------------------------------------------------------- TV: only so many live videos at once
-// A TV decodes a fixed number of videos at a time (the living room TCL: 2; a third fails, and the player then
-// retries forever). So every camera shows its latest picture, TV_LIVE of them play live and they take turns;
-// a tile leaving its turn keeps its last frame, so no picture is old for long. The remote's arrows pick a tile
-// (it goes live and stays live); OK fills the screen with it; Back (the app calls tvBack()) returns to the grid.
-// ?live=N for a TV that can decode more. Only 2 relays run on the server instead of one per camera.
-let tvPicked = null, tvSolo = null, tvTurn = 0;
-const TV_LIVE = Math.max(1, Math.min(4, +new URLSearchParams(location.search).get("live") || 2));
-const TV_TURN_MS = 20000, TV_START_MS = 15000;
-const tvList = () => CAMS.filter(c => sel.has(c.id) && !c.private).sort(byOrder).map(c => tiles.get(c.id)).filter(Boolean);
+// ---------------------------------------------------------------- TV
+// A TV decodes two videos at once (the living room TCL's chip) but any number of pictures, so on the TV
+// every tile shows its camera's low-res stream as pictures (/stream/<id>/wall.mjpeg, ~5 a second) and all
+// of them move. OK on a tile opens that camera full screen in HD (a real video, one decoder) with a
+// Sound on/off toggle that OK flips; Back - the app calls tvBack() - returns to the grid. The column on
+// the left switches property.
+let tvSoloEl = null, tvSound = true;
 function tvTile(t) {
-  t.badge = document.createElement("span"); t.badge.className = "tvBadge"; t.el.querySelector(".stage").appendChild(t.badge);
+  const stage = t.el.querySelector(".stage");
+  const img = document.createElement("img"); img.className = "mjpeg"; img.alt = ""; img.draggable = false;
+  stage.insertBefore(img, stage.querySelector(".spinner")); t.img = img;
+  t.badge = document.createElement("span"); t.badge.className = "tvBadge"; stage.appendChild(t.badge);
   t.el.tabIndex = 0;
-  t.el.addEventListener("focus", () => { tvPicked = t; tvPlan(); });
-  t.el.addEventListener("keydown", ev => { if (ev.key === "Enter" && !tvSolo) { ev.preventDefault(); tvSoloOn(t); } });
-  tvDraw(t);
+  t.el.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); tvSoloOpen(t); } });
+  img.addEventListener("error", () => { t.playing = false; tvDraw(t); clearTimeout(t.retry); t.retry = setTimeout(() => tvConnect(t), 5000); });
+  if (!t.c.private) tvConnect(t);
+  t.lay(); tvDraw(t);
 }
-function tvAgo(ms) { const s = Math.max(0, (Date.now() - ms) / 1000); return !ms ? "" : s < 60 ? `${Math.round(s)} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; }
+function tvConnect(t) { t.playing = false; t.sig = ""; t.same = 0; t.img.src = `/stream/${t.c.id}/wall.mjpeg?t=${Date.now()}`; tvDraw(t); }
 function tvDraw(t) {
-  if (!t.badge) return;
-  t.badge.classList.toggle("live", t.live && t.playing);
-  t.badge.textContent = t.c.private ? "Privacy mode" : t.live ? (t.playing ? "Live" : "Connecting…") : tvAgo(t.stillAt);
+  t.badge.classList.toggle("live", t.playing);
+  t.badge.textContent = t.c.private ? "Privacy mode" : t.playing ? "Live" : "Connecting…";
 }
-function tvStart(t) {
-  if (t.live) return;
-  t.live = true; t.playing = false; t.startedAt = Date.now();
-  t.vs.src = `/stream/${t.c.id}/ws`;
-  tvDraw(t);
-}
-function tvStop(t) {
-  if (!t.live) return;
-  const v = t.vs.video;
-  if (t.playing && v && v.videoWidth) {        // keep its last frame as the still
-    try { const cv = document.createElement("canvas"), k = Math.min(1, 960 / v.videoWidth);
-      cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
-      cv.getContext("2d").drawImage(v, 0, 0, cv.width, cv.height);
-      t.poster.src = cv.toDataURL("image/jpeg", 0.85); t.stillAt = Date.now(); } catch {}
+// A tiny fingerprint of the picture: the cameras burn the time into every frame, so a picture that
+// stops changing means its stream has stalled.
+const tvSigCanvas = document.createElement("canvas"); tvSigCanvas.width = 16; tvSigCanvas.height = 9;
+function tvSig(img) { try { const x = tvSigCanvas.getContext("2d", { willReadFrequently: true }); x.drawImage(img, 0, 0, 16, 9); return x.getImageData(0, 0, 16, 9).data.join(","); } catch { return ""; } }
+function tvSnapshot(img) { try { const cv = document.createElement("canvas"); cv.width = img.naturalWidth; cv.height = img.naturalHeight; cv.getContext("2d").drawImage(img, 0, 0); return cv.toDataURL("image/jpeg", 0.85); } catch { return ""; } }
+
+function tvSoloOpen(t) {
+  if (tvSoloEl || t.c.private) return;
+  const c = t.c, el = document.createElement("div"); el.className = "tvSolo"; el.tabIndex = 0;
+  el.innerHTML = `<img class="still" alt=""><div class="tvSoloBar"><b></b><span class="snd"></span><span class="state">Connecting…</span></div><div class="tvSoloHint">OK: sound on / off · Back: all cameras</div>`;
+  el.querySelector("b").textContent = c.name;
+  const still = el.querySelector(".still"); still.src = t.img.naturalWidth ? tvSnapshot(t.img) : t.poster.src;
+  const vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4"); vs.setAttribute("background", "true");
+  el.prepend(vs); document.body.appendChild(el);
+  vs.src = `/stream/${c.id}/ws`;                     // the HD stream, with sound
+  const v = vs.video;
+  if (v) {
+    v.poster = BLANK; v.controls = false; v.setAttribute("playsinline", ""); v.muted = !tvSound;
+    v.addEventListener("playing", () => { still.style.opacity = "0"; el.querySelector(".state").textContent = ""; });
   }
-  t.poster.style.opacity = "1";
-  t.vs.ondisconnect();                          // closes the socket and frees the decoder
-  t.live = false; t.playing = false;
-  tvDraw(t);
+  for (const x of [vs, still]) applyToBox(el, x, c.rotate, c.flipH, c.flipV);
+  const snd = el.querySelector(".snd");
+  const drawSnd = () => { snd.textContent = tvSound ? "\u{1F50A} Sound on" : "\u{1F507} Sound off"; snd.classList.toggle("off", !tvSound); };
+  drawSnd();
+  el.addEventListener("keydown", ev => {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault(); tvSound = !tvSound; drawSnd();
+    const vv = vs.video; if (vv) { vv.muted = !tvSound; if (tvSound) vv.play().catch(() => {}); }
+  });
+  tvSoloEl = { el, vs, tile: t };
+  el.focus();
 }
-// Which tiles should play now: the solo tile; else the picked one plus the tiles whose turn it is.
-function tvPlan() {
-  const all = tvList(); if (!all.length) return;
-  let want;
-  if (tvSolo) want = [tvSolo];
-  else {
-    want = tvPicked && all.includes(tvPicked) ? [tvPicked] : [];
-    for (let i = 0; want.length < Math.min(TV_LIVE, all.length) && i < all.length; i++) {
-      const t = all[(tvTurn + i) % all.length]; if (!want.includes(t)) want.push(t);
-    }
-  }
-  const stopping = all.filter(t => t.live && !want.includes(t));
-  stopping.forEach(tvStop);
-  // a decoder takes a moment to come free; starting before then fails on the TV
-  setTimeout(() => want.forEach(tvStart), stopping.length ? 700 : 0);
-}
-function tvSoloOn(t) {
-  tvSolo = t; wall.classList.add("solo"); t.el.classList.add("soloTile");
-  tvPlan(); setTimeout(() => { const v = t.vs.video; if (v) { v.muted = false; v.play().catch(() => {}); } t.lay(); }, 800);
+function tvSoloClose() {
+  const s = tvSoloEl; if (!s) return; tvSoloEl = null;
+  s.vs.ondisconnect();
+  const v = s.vs.video; if (v) { try { v.pause(); v.removeAttribute("src"); v.srcObject = null; v.load(); } catch {} }   // frees the decoder now
+  s.el.remove(); s.tile.el.focus();
 }
 window.tvBack = () => {           // the TV app asks first on Back: true = handled here
-  if (!tvSolo) return false;
-  const t = tvSolo; tvSolo = null; const v = t.vs.video; if (v) v.muted = true;
-  wall.classList.remove("solo"); t.el.classList.remove("soloTile"); t.el.focus(); tvPlan();
-  setTimeout(() => { for (const x of tiles.values()) x.lay(); }, 50);
-  return true;
+  if (!tvSoloEl) return false;
+  tvSoloClose(); return true;
 };
 if (TV) {
-  tvPlan();
-  setInterval(() => {               // turns, and a tile that hasn't started in time waits for its next one
-    const now = Date.now();
+  const first = [...tiles.values()][0]; if (first) first.el.focus();
+  setInterval(() => {              // a stream that started, or stopped changing for 10 s, is (re)noticed here
     for (const t of tiles.values()) {
-      if (t.live && !t.playing && now - t.startedAt > TV_START_MS && t !== tvSolo && t !== tvPicked) tvStop(t);
-      tvDraw(t);
+      if (!t.img || t.c.private) continue;
+      if (!t.playing && t.img.naturalWidth) { t.playing = true; t.poster.style.opacity = "0"; tvDraw(t); }
     }
   }, 1000);
-  setInterval(() => { if (tvSolo) return; tvTurn += Math.max(1, TV_LIVE - (tvPicked ? 1 : 0)); tvPlan(); }, TV_TURN_MS);
+  setInterval(() => {
+    for (const t of tiles.values()) {
+      if (!t.playing || !t.img) continue;
+      const sig = tvSig(t.img);
+      t.same = sig && sig === t.sig ? t.same + 1 : 0; t.sig = sig;
+      if (t.same >= 2) { t.poster.src = tvSnapshot(t.img) || t.poster.src; t.poster.style.opacity = "1"; tvConnect(t); }
+    }
+  }, 5000);
 }

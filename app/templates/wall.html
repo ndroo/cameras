@@ -8,6 +8,11 @@
   <label class="small muted sel">Columns <select id="cols"><option value="0">auto</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>
   <button type="button" class="tool" id="fullBtn" title="Fullscreen">⛶ <span>Fullscreen</span></button>
 </div>
+{% if tv %}<nav class="tvSide" aria-label="Properties">
+  <div class="tvSideHead">Cameras</div>
+  {% for h in house_list %}<a href="/wall?house={{ h.id }}&amp;tv=1" class="{% if h.id == house_pick %}on{% endif %}">{{ h.name }}</a>{% endfor %}
+  <div class="tvSideHint">OK on a camera: full screen<br>Back: menu</div>
+</nav>{% endif %}
 <div class="wall" id="wall"{% if tv %} data-tv="1"{% endif %}></div>
 <p class="muted small" id="wallEmpty" hidden>No cameras chosen. Use "Choose cameras" above.</p>
 
