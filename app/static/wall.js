@@ -230,11 +230,11 @@ function tvTile(t) {
   t.badge = document.createElement("span"); t.badge.className = "tvBadge"; stage.appendChild(t.badge);
   t.el.tabIndex = 0;
   t.el.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); tvSoloOpen(t); } });
-  img.addEventListener("error", () => { t.playing = false; tvDraw(t); clearTimeout(t.retry); t.retry = setTimeout(() => tvConnect(t), 5000); });
+  img.addEventListener("error", () => { if (t.paused) return; t.playing = false; tvDraw(t); clearTimeout(t.retry); t.retry = setTimeout(() => tvConnect(t), 5000); });
   if (!t.c.private) tvConnect(t);
   t.lay(); tvDraw(t);
 }
-function tvConnect(t) { t.playing = false; t.sig = ""; t.same = 0; t.img.src = `/stream/${t.c.id}/wall.mjpeg?t=${Date.now()}`; tvDraw(t); }
+function tvConnect(t) { t.paused = false; t.playing = false; t.sig = ""; t.same = 0; t.img.src = `/stream/${t.c.id}/wall.mjpeg?t=${Date.now()}`; tvDraw(t); }
 function tvDraw(t) {
   t.badge.classList.toggle("live", t.playing);
   t.badge.textContent = t.c.private ? "Privacy mode" : t.playing ? "Live" : "Connecting…";
@@ -243,41 +243,106 @@ function tvDraw(t) {
 // stops changing means its stream has stalled.
 const tvSigCanvas = document.createElement("canvas"); tvSigCanvas.width = 16; tvSigCanvas.height = 9;
 function tvSig(img) { try { const x = tvSigCanvas.getContext("2d", { willReadFrequently: true }); x.drawImage(img, 0, 0, 16, 9); return x.getImageData(0, 0, 16, 9).data.join(","); } catch { return ""; } }
-function tvSnapshot(img) { try { const cv = document.createElement("canvas"); cv.width = img.naturalWidth; cv.height = img.naturalHeight; cv.getContext("2d").drawImage(img, 0, 0); return cv.toDataURL("image/jpeg", 0.85); } catch { return ""; } }
+function tvSnapshot(img, w, h) { try { const cv = document.createElement("canvas"); cv.width = w || img.naturalWidth; cv.height = h || img.naturalHeight; cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height); return cv.toDataURL("image/jpeg", 0.85); } catch { return ""; } }
 
+// While one camera fills the screen the grid's streams are closed, so the TV downloads and decodes only
+// the camera it is showing (and the server stops making pictures nobody sees). Each tile keeps its last
+// picture and reconnects on the way back.
+function tvWallPause() {
+  for (const t of tiles.values()) {
+    if (!t.img) continue;
+    clearTimeout(t.retry); t.paused = true;
+    if (t.playing) { const shot = tvSnapshot(t.img); if (shot) t.poster.src = shot; }
+    t.poster.style.opacity = "1"; t.playing = false;
+    t.img.removeAttribute("src"); tvDraw(t);
+  }
+}
+function tvWallResume() { for (const t of tiles.values()) if (t.img && t.paused && !t.c.private) tvConnect(t); }
+
+// One camera full screen: its HD stream with sound, over MSE only. (The player ignores HTML attributes,
+// so its default also tried WebRTC, which wins when it connects and, from the cloud, freezes on a lost
+// packet with nothing to fall back on.) A watchdog rebuilds the player when the picture hasn't started
+// after 12 s or stops moving for 5 s; twice in a row without a good run, it retries without sound.
 function tvSoloOpen(t) {
   if (tvSoloEl || t.c.private) return;
   const c = t.c, el = document.createElement("div"); el.className = "tvSolo"; el.tabIndex = 0;
   el.innerHTML = `<img class="still" alt=""><div class="tvSoloBar"><b></b><span class="snd"></span><span class="state">Connecting…</span></div><div class="tvSoloHint">OK: sound on / off · Back: all cameras</div>`;
   el.querySelector("b").textContent = c.name;
-  const still = el.querySelector(".still"); still.src = t.img.naturalWidth ? tvSnapshot(t.img) : t.poster.src;
-  const vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4"); vs.setAttribute("background", "true");
-  el.prepend(vs); document.body.appendChild(el);
-  vs.src = `/stream/${c.id}/ws`;                     // the HD stream, with sound
-  const v = vs.video;
-  if (v) {
-    v.poster = BLANK; v.controls = false; v.setAttribute("playsinline", ""); v.muted = !tvSound;
-    v.addEventListener("playing", () => { still.style.opacity = "0"; el.querySelector(".state").textContent = ""; });
-  }
-  for (const x of [vs, still]) applyToBox(el, x, c.rotate, c.flipH, c.flipV);
+  const still = el.querySelector(".still"); still.src = (t.playing && tvSnapshot(t.img)) || t.poster.src;
+  document.body.appendChild(el);
+  applyToBox(el, still, c.rotate, c.flipH, c.flipV);
+  tvWallPause();
+  const s = tvSoloEl = { el, tile: t, still, state: el.querySelector(".state"), vs: null, fails: 0, sound: true, reports: 0 };
   const snd = el.querySelector(".snd");
-  const drawSnd = () => { snd.textContent = tvSound ? "\u{1F50A} Sound on" : "\u{1F507} Sound off"; snd.classList.toggle("off", !tvSound); };
-  drawSnd();
+  s.drawSnd = () => { snd.textContent = !s.sound ? "No sound" : tvSound ? "\u{1F50A} Sound on" : "\u{1F507} Sound off"; snd.classList.toggle("off", !s.sound || !tvSound); };
+  s.drawSnd();
   el.addEventListener("keydown", ev => {
     if (ev.key !== "Enter") return;
-    ev.preventDefault(); tvSound = !tvSound; drawSnd();
-    const vv = vs.video; if (vv) { vv.muted = !tvSound; if (tvSound) vv.play().catch(() => {}); }
+    ev.preventDefault();
+    if (!s.sound) { s.sound = true; tvSound = true; s.fails = 0; s.drawSnd(); tvSoloStart(s); return; }   // try with sound again
+    tvSound = !tvSound; s.drawSnd();
+    const v = s.vs && s.vs.video; if (v) { v.muted = !tvSound; if (tvSound) v.play().catch(() => {}); }
   });
-  tvSoloEl = { el, vs, tile: t };
+  tvSoloStart(s);
+  s.watch = setInterval(() => tvSoloWatch(s), 1000);
   el.focus();
+}
+function tvSoloStart(s) {
+  const c = s.tile.c;
+  if (s.vs) tvPlayerEnd(s.vs);
+  const vs = document.createElement("video-stream");
+  vs.mode = "mse"; vs.background = true;           // properties, before it joins the page: it reads no attributes
+  if (!s.sound) vs.media = "video";
+  s.el.prepend(vs);                                 // makes its <video>
+  const v = vs.video;
+  v.poster = BLANK; v.controls = false; v.setAttribute("playsinline", ""); v.muted = !s.sound || !tvSound;
+  v.addEventListener("timeupdate", () => { if (s.vs === vs && !s.live && v.currentTime > 0 && v.readyState >= 2) tvSoloLive(s); });
+  applyToBox(s.el, vs, c.rotate, c.flipH, c.flipV);
+  s.vs = vs; s.begun = Date.now(); s.last = 0; s.moved = 0; s.live = false;
+  vs.src = `/stream/${c.id}/ws`;
+}
+function tvSoloLive(s) {
+  s.live = true; s.liveAt = s.moved = Date.now(); s.last = s.vs.video.currentTime;
+  s.still.style.opacity = "0"; s.state.textContent = "";
+}
+function tvSoloWatch(s) {
+  if (tvSoloEl !== s) return;
+  const v = s.vs.video, now = Date.now(), at = v.currentTime;
+  if (at > s.last + 0.1) { s.last = at; s.moved = now; if (!s.live && v.readyState >= 2) tvSoloLive(s); return; }
+  if (s.live && v.paused && v.readyState >= 3) v.play().catch(() => {});
+  if (s.live ? now - s.moved < 5000 : now - s.begun < 12000) return;
+  tvReport(s, s.live ? "stalled" : "no-start");
+  s.fails = s.live && now - s.liveAt > 30000 ? 1 : s.fails + 1;    // a good run of 30 s+ starts the count over
+  const shot = s.live && v.videoWidth ? tvSnapshot(v, 960, Math.round(960 * v.videoHeight / v.videoWidth)) : "";
+  if (shot) s.still.src = shot;
+  s.still.style.opacity = "1"; s.state.textContent = "Reconnecting…";
+  if (s.fails >= 2 && s.sound) { s.sound = false; s.drawSnd(); }
+  tvSoloStart(s);
+}
+// Ends a player now: its socket, and its hardware decoder (clearing src alone doesn't free that at once).
+function tvPlayerEnd(vs) {
+  clearTimeout(vs.reconnectTID); vs.reconnectTID = 0;
+  try { vs.ondisconnect(); } catch {}
+  const v = vs.video; if (v) { try { v.pause(); v.removeAttribute("src"); v.srcObject = null; v.load(); } catch {} }
+  vs.remove();
+}
+// The TV keeps its console to itself: tell the server (its log) what a stuck player looked like.
+function tvReport(s, kind) {
+  if (++s.reports > 4) return;
+  try {
+    const v = s.vs.video, b = v.buffered;
+    navigator.sendBeacon("/client-log", JSON.stringify({ kind: "tv-solo-" + kind, cam: s.tile.c.id, fails: s.fails, sound: s.sound,
+      codecs: s.vs.mseCodecs || "", ws: s.vs.wsState, readyState: v.readyState, paused: v.paused, t: +v.currentTime.toFixed(2),
+      buffered: b.length ? `${b.start(0).toFixed(2)}-${b.end(b.length - 1).toFixed(2)}` : "none", ua: navigator.userAgent }));
+  } catch {}
 }
 function tvSoloClose() {
   const s = tvSoloEl; if (!s) return; tvSoloEl = null;
-  s.vs.ondisconnect();
-  const v = s.vs.video; if (v) { try { v.pause(); v.removeAttribute("src"); v.srcObject = null; v.load(); } catch {} }   // frees the decoder now
-  s.el.remove(); s.tile.el.focus();
+  clearInterval(s.watch);
+  if (s.vs) tvPlayerEnd(s.vs);
+  s.el.remove(); tvWallResume(); s.tile.el.focus();
 }
-window.tvBack = () => {           // the TV app asks first on Back: true = handled here
+window.tvBack = () => {           // the TV app asks first on Back: true = handled here, false = it leaves
   if (!tvSoloEl) return false;
   tvSoloClose(); return true;
 };
@@ -285,13 +350,13 @@ if (TV) {
   const first = [...tiles.values()][0]; if (first) first.el.focus();
   setInterval(() => {              // a stream that started, or stopped changing for 10 s, is (re)noticed here
     for (const t of tiles.values()) {
-      if (!t.img || t.c.private) continue;
+      if (!t.img || t.c.private || t.paused) continue;
       if (!t.playing && t.img.naturalWidth) { t.playing = true; t.poster.style.opacity = "0"; tvDraw(t); }
     }
   }, 1000);
   setInterval(() => {
     for (const t of tiles.values()) {
-      if (!t.playing || !t.img) continue;
+      if (!t.playing || !t.img || t.paused) continue;
       const sig = tvSig(t.img);
       t.same = sig && sig === t.sig ? t.same + 1 : 0; t.sig = sig;
       if (t.same >= 2) { t.poster.src = tvSnapshot(t.img) || t.poster.src; t.poster.style.opacity = "1"; tvConnect(t); }
