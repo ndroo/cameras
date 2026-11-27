@@ -1008,6 +1008,70 @@ async def frame(request: Request, cam_id: int):
     return Response(r.content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
+WALL_FPS = os.environ.get("WALL_FPS", "5")
+
+
+@app.get("/stream/{cam_id}/wall.mjpeg")
+async def wall_mjpeg(request: Request, cam_id: int):
+    """The camera's low-res (VGA) stream as MJPEG, WALL_FPS pictures a second, for the TV's multi-view
+    (/wall?tv=1): a TV decodes only two videos at once (the living room TCL's chip) but any number of
+    pictures, so every tile can move. One VGA relay and one small ffmpeg per viewer, both ended when the
+    viewer goes; video only."""
+    me = require(request)
+    if not db.can_view(me, cam_id):
+        raise HTTPException(404)
+    if db.privacy_active(cam_id):
+        raise HTTPException(423, "Privacy mode is on")
+    cam = db.one("SELECT * FROM cameras WHERE id=?", cam_id)
+    loop = asyncio.get_event_loop()
+
+    def open_stream():
+        url, tok = mq.request_relay(cam["device_id"], resolution="VGA")
+        sock = tapo.connect_relay(url, tok, cloud.term)
+        tapo.start_preview(sock, "VGA")
+        proc = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-probesize", "300000", "-analyzeduration", "1000000",   # first picture quickly
+                                 "-f", "mpegts", "-i", "pipe:0",
+                                 "-an", "-vf", f"fps={WALL_FPS},format=yuvj420p",   # JPEG wants full-range colour
+                                 "-q:v", "7", "-f", "mpjpeg", "-boundary_tag", "frame",
+                                 "pipe:1"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+        def feed():
+            try:
+                for chunk in tapo.iter_ts(sock):
+                    proc.stdin.write(chunk)
+            except Exception as e:
+                log.info("wall %s ended: %s", cam["name"], e)
+            finally:
+                try: proc.stdin.close()
+                except Exception: pass
+        threading.Thread(target=feed, name=f"wall-{cam_id}", daemon=True).start()
+        return sock, proc
+
+    try:
+        sock, proc = await loop.run_in_executor(_live_pool, open_stream)
+    except Exception as e:
+        log.info("wall %s: %s", cam["name"], e)
+        raise HTTPException(503, str(e)[:200])
+
+    async def body():
+        try:
+            while True:
+                data = await loop.run_in_executor(_live_pool, proc.stdout.read1, 65536)
+                if not data:
+                    break
+                yield data
+        finally:
+            try: proc.kill()
+            except Exception: pass
+            try: sock.shutdown(socket.SHUT_RDWR)    # wakes the feed thread blocked reading the relay
+            except Exception: pass
+            try: sock.close()
+            except Exception: pass
+
+    return StreamingResponse(body(), media_type="multipart/x-mixed-replace;boundary=frame",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 def _save_thumb(cam_id, jpeg):
     p = os.path.join(DATA_DIR, "thumbs", f"{cam_id}.jpg")
     tmp = p + ".tmp"
