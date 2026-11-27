@@ -8,7 +8,7 @@
   <label class="small muted sel">Columns <select id="cols"><option value="0">auto</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>
   <button type="button" class="tool" id="fullBtn" title="Fullscreen">⛶ <span>Fullscreen</span></button>
 </div>
-<div class="wall" id="wall"></div>
+<div class="wall" id="wall"{% if tv %} data-tv="1"{% endif %}></div>
 <p class="muted small" id="wallEmpty" hidden>No cameras chosen. Use "Choose cameras" above.</p>
 
 <div class="drawerBack" id="drawerBack" hidden></div>

@@ -563,3 +563,13 @@ ul.evList li .grow{flex:1}.evDl{margin:0;width:auto;padding:2px 8px;font-size:13
 body:has(.dlTray:not([hidden])) .wrap{padding-bottom:calc(24px + var(--tray,0px) + env(safe-area-inset-bottom))}
 @media (max-width:640px){.dlTray{left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));width:auto;max-width:none}.dlTray.shut{left:auto}}
 @media (prefers-reduced-motion: reduce){.dlJob.flash,.dlJob.is-queued .dlBar i,.dlBar.busy i{animation:none}}
+
+/* the TV app (/wall?tv=1): no header or tools, the wall is the whole screen, camera names always shown */
+body.tv{background:#000}
+body.tv .wrap{max-width:none;margin:0;padding:0}
+body.tv .wallHead,body.tv #wallEmpty,body.tv .dlTray{display:none}
+body.tv .wall{position:fixed;inset:0;height:100vh;background:#000;padding:0;gap:3px;grid-auto-rows:1fr;align-items:stretch}
+body.tv .wallTile{border:0;border-radius:0;height:100%;box-shadow:none}
+body.tv .wallTile .stage{aspect-ratio:auto;height:100%}
+body.tv .wallTile .tag{padding:14px 12px 8px;font-size:15px}
+body.tv .wallTile .tag .open,body.tv .wallTile .tag .grip,body.tv .wallTile .tag .garageTile{display:none}

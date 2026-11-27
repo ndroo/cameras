@@ -56,6 +56,12 @@ MIGRATIONS = [
     # footage lists per camera per day, so past days and multi-day views don't ask the card every time
     "CREATE TABLE IF NOT EXISTS clip_cache (camera_id INTEGER, date TEXT, clips TEXT, events TEXT, at REAL, PRIMARY KEY (camera_id, date))",
     "CREATE TABLE IF NOT EXISTS garage_openers (id INTEGER PRIMARY KEY, house_id INTEGER REFERENCES houses(id) ON DELETE CASCADE, camera_id INTEGER REFERENCES cameras(id) ON DELETE SET NULL, name TEXT NOT NULL, backend TEXT DEFAULT 'shelly', host TEXT, auth TEXT, relay INTEGER DEFAULT 0, pulse REAL DEFAULT 0.5, state_input INTEGER, state_invert INTEGER DEFAULT 0, created REAL)",
+    # devices: a TV or other screen with no phone. It's a person row (phone 'device:<random>', which can't
+    # get a code or sign in) that signs in with a device key; only the key's sha256 is kept.
+    "ALTER TABLE people ADD COLUMN is_device INTEGER DEFAULT 0",
+    "ALTER TABLE people ADD COLUMN view_all INTEGER DEFAULT 0",    # sees every camera, view-only (devices)
+    "ALTER TABLE people ADD COLUMN key_hash TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS people_key ON people(key_hash)",
 ]
 
 ALERT_KINDS = ("doorbell", "tamper", "offline", "motion")
@@ -121,8 +127,8 @@ def kv_set(k, v):
 
 # ------------------------------------------------------------------ access helpers
 def person_cameras(person):
-    """Cameras this person may view, grouped by house. Admins see everything."""
-    if person["is_admin"]:
+    """Cameras this person may view, grouped by house. Admins and devices (view_all) see everything."""
+    if person["is_admin"] or person["view_all"]:
         cams = q("SELECT c.*, h.name AS house_name, h.slug AS house_slug FROM cameras c "
                  "LEFT JOIN houses h ON h.id=c.house_id WHERE c.enabled=1 ORDER BY h.sort, h.name, c.sort, c.name")
     else:
@@ -167,7 +173,7 @@ def recipients_for(camera_id, kind, labels=()):
     custom = q("SELECT p.*, ca.kinds AS ca_kinds FROM camera_alerts ca JOIN people p ON p.id=ca.person_id WHERE ca.camera_id=?", camera_id)
     out = [p for p in custom if tags & set((p["ca_kinds"] or "").split(",")) and can_view(p, camera_id)]
     skip = {p["id"] for p in custom}
-    return out + [p for p in _group_recipients(camera_id, kind) if p["id"] not in skip]
+    return [p for p in out + [p for p in _group_recipients(camera_id, kind) if p["id"] not in skip] if not p["is_device"]]   # a TV gets no texts
 
 
 def _group_recipients(camera_id, kind):
