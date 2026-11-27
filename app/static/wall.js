@@ -85,7 +85,7 @@ function drawWall() {
     const el = document.createElement("div"); el.className = "wallTile"; el.title = "Click for sound";
     el.dataset.id = c.id;
     el.innerHTML = `<div class="stage"><img class="poster" src="/stream/${c.id}/thumb.jpg?t=${c.thumbAt}" alt=""><div class="spinner"><i class="spin"></i>Connecting…</div>
-      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b><span>${c.house || ""}${c.sd ? ` · ${c.sd.short}` : ""}</span><i class="snd" hidden>🔊</i><a class="open" href="/cam/${c.id}" title="Open this camera">↗</a>${c.opener ? `<button type="button" class="garageTile" title="Open / close ${c.opener.name}">🚪</button>` : ""}<i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
+      <div class="tag"><span class="dot ${c.online === 1 ? "ok" : c.online === 0 ? "bad" : "unk"}"></span><b>${c.name}</b>${tagInfo(c)}<i class="snd" hidden>🔊</i><a class="open" href="/cam/${c.id}" title="Open this camera">↗</a>${c.opener ? `<button type="button" class="garageTile" title="Open / close ${c.opener.name}">🚪</button>` : ""}<i class="grip" title="Drag to rearrange">⠿</i></div></div>`;
     const sideways = c.rotate === 90 || c.rotate === 270; if (sideways) el.classList.add("sideways");
     const stage = el.querySelector(".stage"), vs = document.createElement("video-stream"); vs.setAttribute("mode", "mse,hls,mp4,mjpeg"); vs.setAttribute("background", "true");
     stage.prepend(vs); wall.appendChild(el);
@@ -215,6 +215,13 @@ document.addEventListener("fullscreenchange", () => { drawWall(); setTimeout(() 
 let idleT = null;
 document.addEventListener("mousemove", () => { if (!document.fullscreenElement) return; wall.classList.add("active"); clearTimeout(idleT); idleT = setTimeout(() => wall.classList.remove("active"), 2500); });
 document.addEventListener("fullscreenchange", () => { wall.classList.remove("active"); });
+
+// Under a tile's name: its house and SD card. The TV shows one house, so there only an SD card that
+// isn't recording (missing, or a problem such as read-only) gets a line, as a warning.
+function tagInfo(c) {
+  if (!TV) return `<span>${c.house || ""}${c.sd ? ` · ${c.sd.short}` : ""}</span>`;
+  return c.sd && c.sd.state !== "card" ? `<span class="sdWarn" title="${c.sd.long}">⚠ ${c.sd.short}</span>` : "";
+}
 
 // ---------------------------------------------------------------- TV
 // A TV decodes two videos at once (the living room TCL's chip) but any number of pictures, so on the TV

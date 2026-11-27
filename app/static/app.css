@@ -573,6 +573,7 @@ body.tv .wallTile{border:0;border-radius:0;height:100%;box-shadow:none}
 body.tv .wallTile .stage{aspect-ratio:auto;height:100%}
 body.tv .wallTile .tag{padding:14px 12px 8px;font-size:15px}
 body.tv .wallTile .tag .open,body.tv .wallTile .tag .grip,body.tv .wallTile .tag .garageTile{display:none}
+body.tv .wallTile .tag .sdWarn{padding:3px 10px;border-radius:999px;background:rgba(245,158,11,.92);color:#1c1300;font-size:13px;font-weight:700}
 body.tv .wallTile .stage .poster{opacity:1}
 body.tv .wallTile .spinner{display:none}
 body.tv .wallTile:focus{outline:none}
